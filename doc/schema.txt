@@ -1,0 +1,54 @@
+create table disks(
+	id integer primary key,
+	path text not null,
+	serial text,
+	size integer not null,
+	block_size integer not null
+);
+
+create table config(
+	key text primary key,
+	value
+);
+
+create table superblocks(
+	id integer primary key,
+	physical_file_id integer,
+	file_order integer,
+	read_errors integer not null default 0
+);
+
+create table physical_files(
+	id integer primary key autoincrement,
+	size integer not null,
+	hash text not null
+);
+
+create table virtual_files(
+	id integer primary key autoincrement,
+	physical_file_id integer not null,
+	offset integer not null,
+	size integer not null,
+	hash text not null
+);
+
+create index virtual_files_by_physical_file_id on virtual_files (physical_file_id);
+
+create table fs(
+	id integer primary key autoincrement,
+	name text,
+	parent integer,
+	is_dir integer not null,
+	is_virtual integer,
+	file_id integer,
+	all_or_nothing integer not null default 0
+);
+
+create index fs_by_parent on fs (parent);
+
+create table fs_root(
+    root integer primary key
+);
+
+insert into fs (is_dir) values (1);
+insert into fs_root (root) values (last_insert_rowid());
