@@ -87,7 +87,7 @@ fn main() -> Result<()> {
             
             if disks.is_empty() {
                 println!("Database exists but no disks are registered in this pool.");
-                return Ok(mut_return_ok());
+                return Ok(());
             }
 
             let num_disks = disks.len();
@@ -139,5 +139,3 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-
-fn mut_return_ok() {}
