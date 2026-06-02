@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use rusqlite::Connection;
 use anyhow::{Context, Result};
-use crate::pool::BLOCK_SIZE;
 
 #[derive(Debug)]
 pub struct DiskInfo {
@@ -46,10 +45,15 @@ pub fn create_pool(db_path: &Path, disk_paths: &[PathBuf]) -> Result<()> {
                 None
             });
 
-        // We set block_size to our BLOCK_SIZE constant (516 KiB)
+        let block_size = crate::sys::get_block_size(&abs_path)
+            .unwrap_or_else(|err| {
+                eprintln!("Warning: Failed to retrieve block size for {:?}: {}", abs_path, err);
+                None
+            });
+
         tx.execute(
             "INSERT INTO disks (id, path, serial, size, block_size) VALUES (?1, ?2, ?3, ?4, ?5)",
-            (id as i64 + 1, &path_str, serial, size as i64, BLOCK_SIZE as i64),
+            (id as i64 + 1, &path_str, serial, size as i64, block_size),
         )
         .with_context(|| format!("Failed to insert disk {:?}", path_str))?;
     }
