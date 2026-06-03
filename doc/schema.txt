@@ -3,7 +3,7 @@ create table disks(
 	path text not null,
 	serial text,
 	size integer not null,
-	block_size integer not null
+	block_size integer
 );
 
 create table config(
@@ -17,6 +17,8 @@ create table superblocks(
 	file_order integer,
 	read_errors integer not null default 0
 );
+
+create index superblocks_by_physical_file_id on superblocks (physical_file_id);
 
 create table physical_files(
 	id integer primary key autoincrement,

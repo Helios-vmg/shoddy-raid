@@ -1,8 +1,8 @@
 #![allow(dead_code)]
-pub const BLOCK_SIZE: u64 = 528_384; // 516 KiB
-pub const DATA_SIZE: u64 = 524_288;  // 512 KiB
-pub const HASH_SIZE: u64 = 4_096;    // 4 KiB
-pub const SUBBLOCK_SIZE: u64 = 4_096; // 4 KiB
+pub const BLOCK_SIZE: u64 = 516 << 10; // 516 KiB
+pub const DATA_SIZE: u64 = 512 << 10;   // 512 KiB
+pub const HASH_SIZE: u64 = 4 << 10;     // 4 KiB
+pub const SUBBLOCK_SIZE: u64 = 4 << 10; // 4 KiB
 pub const SUBBLOCKS_PER_BLOCK: usize = 128;
 pub const HASH_BYTES: usize = 32;
 
