@@ -44,6 +44,10 @@ enum Commands {
         /// Name to store the file as in the filesystem
         #[arg(short, long)]
         name: String,
+
+        /// Overwrite existing file
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -65,7 +69,7 @@ fn main() -> Result<()> {
             
             println!("Successfully initialized pool with {} disks.", disk_paths.len());
         }
-        Commands::AddFile { db_path, file_path, name } => {
+        Commands::AddFile { db_path, file_path, name, force } => {
             println!("Adding file to pool:");
             println!("  Database:  {:?}", db_path);
             println!("  File:      {:?}", file_path);
@@ -73,7 +77,7 @@ fn main() -> Result<()> {
 
             // Check if file already exists
             let path_components = utils::split_path(&name);
-            if db::file_exists(&db_path, &path_components)? {
+            if !force && db::file_exists(&db_path, &path_components)? {
                 return Err(anyhow::anyhow!("File '{}' already exists in the pool", name));
             }
 
