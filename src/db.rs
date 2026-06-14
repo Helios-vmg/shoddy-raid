@@ -161,7 +161,7 @@ pub fn get_free_superblocks(
 /// path_components is a vector of directory/file names representing the path.
 pub fn file_exists(db_path: &Path, path_components: &[&str]) -> Result<bool> {
     if !db_path.exists() {
-        return Err(anyhow::anyhow!("Database file {:?} does not exist", db_path));
+        return Err(anyhow::anyhow!("Database file {db_path:?} does not exist"));
     }
 
     // Empty path refers to root directory, not a file
@@ -170,7 +170,7 @@ pub fn file_exists(db_path: &Path, path_components: &[&str]) -> Result<bool> {
     }
 
     let conn = Connection::open(db_path)
-        .with_context(|| format!("Failed to open database at {:?}", db_path))?;
+        .with_context(|| format!("Failed to open database at {db_path:?}"))?;
 
     // Get the root directory ID
     let root_id: i64 = conn.query_row("SELECT root FROM fs_root", [], |row| row.get(0))?;
@@ -201,7 +201,7 @@ pub fn file_exists(db_path: &Path, path_components: &[&str]) -> Result<bool> {
     match is_dir {
         Some(0) => Ok(true),
         None => Ok(false),
-        _ => Err(anyhow::anyhow!("Path '{}' refers to a directory, not a file", file_name))
+        _ => Err(anyhow::anyhow!("Path '{file_name}' refers to a directory, not a file"))
     }
 }
 
@@ -271,30 +271,6 @@ pub fn ensure_path(
     Ok(current_id)
 }
 
-/// Adds a file entry to the filesystem.
-fn add_file_entry(
-    tx: &rusqlite::Transaction,
-    name: &str,
-    parent_id: i64,
-    physical_file_id: i64,
-    size: u64,
-    hash: &str,
-) -> Result<()> {
-    tx.execute(
-        "INSERT INTO virtual_files (physical_file_id, offset, size, hash) VALUES (?1, 0, ?2, ?3)",
-        (physical_file_id, size as i64, hash),
-    )?;
-    
-    let virtual_file_id = tx.last_insert_rowid();
-    
-    tx.execute(
-        "INSERT INTO fs (name, parent, is_dir, is_virtual, file_id, all_or_nothing) VALUES (?1, ?2, 0, 1, ?3, 1)",
-        (name, parent_id, virtual_file_id),
-    )?;
-    
-    Ok(())
-}
-
 pub fn commit_file(db_path: &Path, path_components: &[&str], file_size: u64, file_hash: &str, allocated_ids: &[u64]) -> Result<()> {
     let mut conn = rusqlite::Connection::open(db_path)
         .with_context(|| format!("Failed to open database at {:?}", db_path))?;
@@ -311,8 +287,10 @@ pub fn commit_file(db_path: &Path, path_components: &[&str], file_size: u64, fil
     // Create intermediate directories and add file entry
     let parent_id = ensure_path(&tx, path_components)
         .context("Failed to ensure path")?;
-    add_file_entry(&tx, &path_components[path_components.len() - 1], parent_id, physical_file_id, file_size, file_hash)
-        .context("Failed to add file entry")?;
+    tx.execute(
+        "INSERT INTO fs (name, parent, is_dir, is_virtual, file_id, all_or_nothing) VALUES (?1, ?2, 0, 0, ?3, 1)",
+        (&path_components[path_components.len() - 1], parent_id, physical_file_id),
+    )?;
     
     tx.commit()
         .context("Failed to commit database transaction")?;
