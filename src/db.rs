@@ -204,3 +204,117 @@ pub fn file_exists(db_path: &Path, path_components: &[&str]) -> Result<bool> {
         _ => Err(anyhow::anyhow!("Path '{}' refers to a directory, not a file", file_name))
     }
 }
+
+/// Adds a new physical file record and returns its ID.
+fn add_physical_file(
+    tx: &rusqlite::Transaction,
+    size: u64,
+    hash: &str,
+) -> Result<i64> {
+    tx.execute(
+        "INSERT INTO physical_files (size, hash) VALUES (?1, ?2)",
+        (size as i64, hash),
+    )?;
+    
+    Ok(tx.last_insert_rowid())
+}
+
+/// Updates superblocks with physical_file_id and file_order.
+fn assign_superblocks(
+    tx: &rusqlite::Transaction,
+    physical_file_id: i64,
+    superblock_ids: &[u64],
+) -> Result<()> {
+    for (order, &superblock_id) in superblock_ids.iter().enumerate() {
+        tx.execute(
+            "UPDATE superblocks SET physical_file_id = ?1, file_order = ?2 WHERE id = ?3",
+            (physical_file_id, order as i64, superblock_id as i64),
+        )?;
+    }
+    Ok(())
+}
+
+/// Creates intermediate directories in the filesystem and returns the parent ID.
+pub fn ensure_path(
+    tx: &rusqlite::Transaction,
+    path_components: &[&str],
+) -> Result<i64> {
+    // Get the root directory ID
+    let root_id: i64 = tx.query_row("SELECT root FROM fs_root", [], |row| row.get(0))?;
+    
+    let mut current_id = root_id;
+    
+    // Create intermediate directories if they don't exist
+    for component in path_components.iter().take(path_components.len() - 1) {
+        let parent_id = match tx.query_row(
+            "SELECT id, is_dir FROM fs WHERE parent = ?1 AND name = ?2",
+            (current_id, *component),
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ) {
+            Ok((_, 0)) => return Err(anyhow::anyhow!(
+                "Cannot create directory '{}': a file with the same name already exists",
+                *component
+            )),
+            Ok((id, _)) => id,
+            Err(_) => {
+                // Entry doesn't exist, create directory
+                tx.execute(
+                    "INSERT INTO fs (name, parent, is_dir, is_virtual) VALUES (?1, ?2, 1, 0)",
+                    (*component, current_id),
+                )?;
+                tx.last_insert_rowid()
+            }
+        };
+        current_id = parent_id;
+    }
+    
+    Ok(current_id)
+}
+
+/// Adds a file entry to the filesystem.
+fn add_file_entry(
+    tx: &rusqlite::Transaction,
+    name: &str,
+    parent_id: i64,
+    physical_file_id: i64,
+    size: u64,
+    hash: &str,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO virtual_files (physical_file_id, offset, size, hash) VALUES (?1, 0, ?2, ?3)",
+        (physical_file_id, size as i64, hash),
+    )?;
+    
+    let virtual_file_id = tx.last_insert_rowid();
+    
+    tx.execute(
+        "INSERT INTO fs (name, parent, is_dir, is_virtual, file_id, all_or_nothing) VALUES (?1, ?2, 0, 1, ?3, 1)",
+        (name, parent_id, virtual_file_id),
+    )?;
+    
+    Ok(())
+}
+
+pub fn commit_file(db_path: &Path, path_components: &[&str], file_size: u64, file_hash: &str, allocated_ids: &[u64]) -> Result<()> {
+    let mut conn = rusqlite::Connection::open(db_path)
+        .with_context(|| format!("Failed to open database at {:?}", db_path))?;
+    let tx = conn.transaction()?;
+    
+    // Add physical file record
+    let physical_file_id = add_physical_file(&tx, file_size, &file_hash)
+        .context("Failed to add physical file record")?;
+    
+    // Assign superblocks to this file
+    assign_superblocks(&tx, physical_file_id, allocated_ids)
+        .context("Failed to assign superblocks")?;
+    
+    // Create intermediate directories and add file entry
+    let parent_id = ensure_path(&tx, path_components)
+        .context("Failed to ensure path")?;
+    add_file_entry(&tx, &path_components[path_components.len() - 1], parent_id, physical_file_id, file_size, file_hash)
+        .context("Failed to add file entry")?;
+    
+    tx.commit()
+        .context("Failed to commit database transaction")?;
+    Ok(())
+}
