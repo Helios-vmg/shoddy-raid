@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use crate::pool::{PoolGeometry, DATA_SIZE, SUBBLOCK_SIZE, BLOCK_SIZE};
+use crate::pool::{PoolGeometry, SUBBLOCK_SIZE, BLOCK_SIZE};
 use std::fs::File;
 use std::io::Write;
 use std::io::Seek;

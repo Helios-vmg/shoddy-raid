@@ -2,9 +2,10 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use rusqlite::{
     Connection,
-    OptionalExtension,
+    Transaction,
 };
 use anyhow::{Context, Result};
+use crate::utils;
 
 const BLOCK_SIZE: u64 = 516 * 1024; // 516 KiB
 
@@ -96,15 +97,8 @@ pub fn create_pool(db_path: &Path, disk_paths: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-pub fn get_disks(db_path: &Path) -> Result<Vec<DiskInfo>> {
-    if !db_path.exists() {
-        return Err(anyhow::anyhow!("Database file {:?} does not exist", db_path));
-    }
-
-    let conn = Connection::open(db_path)
-        .with_context(|| format!("Failed to open database at {:?}", db_path))?;
-    
-    let mut stmt = conn.prepare("SELECT id, path, serial, size, block_size FROM disks ORDER BY id")?;
+pub fn get_disks_with_tx(tx: &Transaction) -> Result<Vec<DiskInfo>> {
+    let mut stmt = tx.prepare("SELECT id, path, serial, size, block_size FROM disks ORDER BY id")?;
     let disk_iter = stmt.query_map((), |row| {
         Ok(DiskInfo {
             id: row.get(0)?,
@@ -122,22 +116,24 @@ pub fn get_disks(db_path: &Path) -> Result<Vec<DiskInfo>> {
     Ok(disks)
 }
 
-/// Returns the IDs of free superblocks without modifying the database.
-/// Returns an error if there are not enough free superblocks available.
-pub fn get_free_superblocks(
-    db_path: &Path,
-    required: i64,
-) -> Result<Vec<u64>> {
+pub fn get_disks(db_path: &Path) -> Result<Vec<DiskInfo>> {
     if !db_path.exists() {
         return Err(anyhow::anyhow!("Database file {:?} does not exist", db_path));
     }
-
-    let conn = Connection::open(db_path)
+    let mut conn = Connection::open(db_path)
         .with_context(|| format!("Failed to open database at {:?}", db_path))?;
+    get_disks_with_tx(&conn.transaction()?)
+}
 
+/// Returns the IDs of free superblocks without modifying the database.
+/// Returns an error if there are not enough free superblocks available.
+pub fn get_free_superblocks_with_tx(
+    tx: &Transaction,
+    required: i64,
+) -> Result<Vec<u64>> {
     // Get the IDs of free superblocks
     let mut superblock_ids = Vec::with_capacity(required as usize);
-    let mut stmt = conn.prepare(
+    let mut stmt = tx.prepare(
         "SELECT id FROM superblocks WHERE physical_file_id IS NULL LIMIT ?1"
     )?;
     let superblock_iter = stmt.query_map((required,), |row| row.get(0))?;
@@ -157,52 +153,94 @@ pub fn get_free_superblocks(
     Ok(superblock_ids)
 }
 
-/// Checks if a file with the given path exists in the database's filesystem.
-/// path_components is a vector of directory/file names representing the path.
-pub fn file_exists(db_path: &Path, path_components: &[&str]) -> Result<bool> {
-    if !db_path.exists() {
-        return Err(anyhow::anyhow!("Database file {db_path:?} does not exist"));
-    }
+/// Returns the IDs of free superblocks without modifying the database.
+/// Returns an error if there are not enough free superblocks available.
+pub fn get_free_superblocks(
+    db_path: &Path,
+    required: i64,
+) -> Result<Vec<u64>> {
+    let mut conn = Connection::open(db_path)
+        .with_context(|| format!("Failed to open database at {:?}", db_path))?;
 
-    // Empty path refers to root directory, not a file
-    if path_components.is_empty() {
-        return Err(anyhow::anyhow!("Path refers to a directory"));
-    }
+    get_free_superblocks_with_tx(&conn.transaction()?, required)
+}
 
-    let conn = Connection::open(db_path)
-        .with_context(|| format!("Failed to open database at {db_path:?}"))?;
-
+pub fn get_file_id_with_tx(tx: &Transaction, dst_path: &[&str]) -> Result<Option<i64>> {
     // Get the root directory ID
-    let root_id: i64 = conn.query_row("SELECT root FROM fs_root", [], |row| row.get(0))?;
+    let root_id: i64 = tx.query_row("SELECT root FROM fs_root", [], |row| row.get(0))?;
 
     // Traverse the directory tree to find the parent directory of the file
     let mut current_id = root_id;
-    for component in path_components.iter().take(path_components.len() - 1) {
-        let parent_id: i64 = match conn.query_row(
-            "SELECT id FROM fs WHERE parent = ?1 AND name = ?2 AND is_dir = 1",
+    for component in dst_path.iter().take(dst_path.len() - 1) {
+        let parent_id: i64 = match tx.query_row(
+            "SELECT id, is_dir FROM fs WHERE parent = ?1 AND name = ?2",
             (current_id, *component),
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         ) {
-            Ok(id) => id,
-            Err(_) => return Ok(false), // Directory not found
+            Ok((_, 0)) => return Err(anyhow::anyhow!(
+                "Cannot access '{}': a file with the same name already exists",
+                *component
+            )),
+            Ok((id, _)) => id,
+            Err(_) => return Ok(None),
         };
         current_id = parent_id;
     }
 
     // Check if the file exists in the parent directory
-    let file_name = path_components[path_components.len() - 1];
-    let is_dir: Option<i64> = conn.query_row(
-        "SELECT is_dir FROM fs WHERE parent = ?1 AND name = ?2",
+    let file_name = dst_path[dst_path.len() - 1];
+    let (id, is_dir): (i64, bool) = match tx.query_row(
+        "SELECT id, is_dir FROM fs WHERE parent = ?1 AND name = ?2",
         (current_id, file_name),
-        |row| row.get(0),
-    ).optional()?;
-    
-    // If no row returned, file doesn't exist
-    match is_dir {
-        Some(0) => Ok(true),
-        None => Ok(false),
-        _ => Err(anyhow::anyhow!("Path '{file_name}' refers to a directory, not a file"))
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ) {
+        Ok(result) => result,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(err) => return Err(anyhow::anyhow!("Database query error: {}", err)),
+    };
+
+    if is_dir{
+        let path = utils::join_path(dst_path);
+        Err(anyhow::anyhow!("Path '{path:?}' refers to a directory, not a file"))
+    }else{
+        Ok(Some(id))
     }
+}
+
+/// Looks up a file in the filesystem and returns its entry data.
+/// Returns Ok(Some((file_id, is_dir, is_virtual, file_id))) if found,
+/// Ok(None) if not found, or Err if the path refers to a directory.
+pub fn get_file_id(
+    db_path: &Path,
+    dst_path: &[&str],
+) -> Result<Option<i64>> {
+    if !db_path.exists() {
+        return Err(anyhow::anyhow!("Database file {db_path:?} does not exist"));
+    }
+
+    if dst_path.is_empty() {
+        return Err(anyhow::anyhow!("Path refers to a directory"));
+    }
+
+    let mut conn = Connection::open(db_path)
+        .with_context(|| format!("Failed to open database at {db_path:?}"))?;
+
+    get_file_id_with_tx(&conn.transaction()?, dst_path)
+}
+
+/// Checks if a file with the given path exists in the database's filesystem.
+/// path_components is a vector of directory/file names representing the path.
+pub fn file_exists_with_tx(tx: &Transaction, dst_path: &[&str]) -> Result<bool> {
+    Ok(get_file_id_with_tx(tx, dst_path)?.is_some())
+}
+
+/// Checks if a file with the given path exists in the database's filesystem.
+/// path_components is a vector of directory/file names representing the path.
+pub fn file_exists(db_path: &Path, dst_path: &[&str]) -> Result<bool> {
+    let mut conn = Connection::open(db_path)
+        .with_context(|| format!("Failed to open database at {db_path:?}"))?;
+
+    Ok(file_exists_with_tx(&conn.transaction()?, dst_path)?)
 }
 
 /// Adds a new physical file record and returns its ID.
@@ -237,7 +275,7 @@ fn assign_superblocks(
 /// Creates intermediate directories in the filesystem and returns the parent ID.
 pub fn ensure_path(
     tx: &rusqlite::Transaction,
-    path_components: &[&str],
+    path: &[&str],
 ) -> Result<i64> {
     // Get the root directory ID
     let root_id: i64 = tx.query_row("SELECT root FROM fs_root", [], |row| row.get(0))?;
@@ -245,7 +283,7 @@ pub fn ensure_path(
     let mut current_id = root_id;
     
     // Create intermediate directories if they don't exist
-    for component in path_components.iter().take(path_components.len() - 1) {
+    for component in path.iter().take(path.len() - 1) {
         let parent_id = match tx.query_row(
             "SELECT id, is_dir FROM fs WHERE parent = ?1 AND name = ?2",
             (current_id, *component),
@@ -271,11 +309,7 @@ pub fn ensure_path(
     Ok(current_id)
 }
 
-pub fn commit_file(db_path: &Path, path_components: &[&str], file_size: u64, file_hash: &str, allocated_ids: &[u64]) -> Result<()> {
-    let mut conn = rusqlite::Connection::open(db_path)
-        .with_context(|| format!("Failed to open database at {:?}", db_path))?;
-    let tx = conn.transaction()?;
-    
+pub fn commit_file_with_tx(tx: &Transaction, dst_path: &[&str], file_size: u64, file_hash: &str, allocated_ids: &[u64]) -> Result<()> {
     // Add physical file record
     let physical_file_id = add_physical_file(&tx, file_size, &file_hash)
         .context("Failed to add physical file record")?;
@@ -285,14 +319,70 @@ pub fn commit_file(db_path: &Path, path_components: &[&str], file_size: u64, fil
         .context("Failed to assign superblocks")?;
     
     // Create intermediate directories and add file entry
-    let parent_id = ensure_path(&tx, path_components)
+    let parent_id = ensure_path(&tx, dst_path)
         .context("Failed to ensure path")?;
     tx.execute(
         "INSERT INTO fs (name, parent, is_dir, is_virtual, file_id, all_or_nothing) VALUES (?1, ?2, 0, 0, ?3, 1)",
-        (&path_components[path_components.len() - 1], parent_id, physical_file_id),
+        (&dst_path[dst_path.len() - 1], parent_id, physical_file_id),
     )?;
     
-    tx.commit()
-        .context("Failed to commit database transaction")?;
     Ok(())
+}
+
+pub fn commit_file(db_path: &Path, dst_path: &[&str], file_size: u64, file_hash: &str, allocated_ids: &[u64]) -> Result<()> {
+    let mut conn = rusqlite::Connection::open(db_path)
+        .with_context(|| format!("Failed to open database at {:?}", db_path))?;
+    let tx =  conn.transaction()?;
+    commit_file_with_tx(&tx, dst_path, file_size, file_hash, allocated_ids)?;
+    tx.commit()
+        .context("Failed to commit database transaction")
+}
+
+fn delete_physical_file_with_tx(tx: &Transaction, file_id: i64, physical_file_id: i64) -> Result<()> {
+    // Delete the file entry from fs
+    tx.execute(
+        "DELETE FROM fs WHERE id = ?1",
+        (file_id,),
+    )?;
+
+    // Check if any other files reference this physical file
+    let ref_count: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM fs WHERE file_id = ?1",
+        (file_id,),
+        |row| row.get(0),
+    )?;
+
+    if ref_count == 0 {
+        // No other files reference this physical file, delete it
+        tx.execute(
+            "DELETE FROM physical_files WHERE id = ?1",
+            (physical_file_id,),
+        )?;
+
+        // Reset all superblocks that were assigned to this file
+        tx.execute(
+            "UPDATE superblocks SET physical_file_id = NULL, file_order = NULL WHERE physical_file_id = ?1",
+            (physical_file_id,),
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Deletes a file from the pool.
+/// If no other files reference the same physical file, it will also delete
+/// the physical file record and reset the superblocks.
+/// Returns an error if the file is marked as virtual.
+pub fn delete_file_with_tx(tx: &Transaction, file_id: i64) -> Result<()> {
+    let (is_virtual, physical_file_id): (i64, i64) = tx.query_row(
+        "SELECT is_virtual, file_id FROM fs WHERE id = ?1",
+        (file_id,),
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+
+    if is_virtual != 0 {
+        Err(anyhow::anyhow!("Cannot delete virtual file"))
+    }else{
+        delete_physical_file_with_tx(tx, file_id, physical_file_id)
+    }
 }

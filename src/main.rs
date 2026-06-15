@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use anyhow::{Context, Result};
 use pool::PoolGeometry;
+use rusqlite::{Connection};
 
 #[derive(Parser)]
 #[command(name = "shoddy-raid")]
@@ -75,13 +76,24 @@ fn main() -> Result<()> {
             println!("  File:      {:?}", file_path);
             println!("  Name:      {}", name);
 
-            // Check if file already exists
-            let path_components = utils::split_path(&name);
-            if !force && db::file_exists(&db_path, &path_components)? {
-                return Err(anyhow::anyhow!("File '{}' already exists in the pool", name));
+            let dst_path = utils::split_path(&name);
+
+            let mut conn = Connection::open(&db_path)
+                .with_context(|| format!("Failed to open database at {db_path:?}"))?;
+            let tx = conn.transaction()
+                .context("Failed to start database transaction")?;
+
+            if db::file_exists_with_tx(&tx, &dst_path)? {
+                if !force {
+                    return Err(anyhow::anyhow!("File '{}' already exists in the pool", name));
+                }
+                file_ops::replace_file(&tx, &file_path, &dst_path)?;
+            }else{
+                file_ops::add_file(&tx, &file_path, &dst_path)?;
             }
 
-            file_ops::add_file(&db_path, &file_path, &path_components)?;
+            tx.commit()
+                .context("Failed to commit database transaction")?;
             
             println!("  File '{name}' successfully added to pool");
         }

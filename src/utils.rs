@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -33,4 +35,8 @@ pub fn split_path(name: &str) -> Vec<&str> {
     name.split(|c| c == '/' || c == '\\')
         .filter(|s| !s.is_empty())
         .collect()
+}
+
+pub fn join_path(components: &[&str]) -> PathBuf {
+    components.join("/").into()
 }
