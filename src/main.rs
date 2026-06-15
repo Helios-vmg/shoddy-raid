@@ -3,6 +3,7 @@ mod disk;
 mod file_ops;
 mod pool;
 mod sys;
+mod tree;
 mod utils;
 
 use std::path::PathBuf;
