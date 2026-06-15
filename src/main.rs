@@ -83,19 +83,23 @@ fn main() -> Result<()> {
             let tx = conn.transaction()
                 .context("Failed to start database transaction")?;
 
-            if db::file_exists_with_tx(&tx, &dst_path)? {
-                if !force {
-                    return Err(anyhow::anyhow!("File '{}' already exists in the pool", name));
+            let operation = {
+                if db::file_exists_with_tx(&tx, &dst_path)? {
+                    if !force {
+                        return Err(anyhow::anyhow!("File '{}' already exists in the pool", name));
+                    }
+                    file_ops::replace_file(&tx, &file_path, &dst_path)?;
+                    "replaced in"
+                }else{
+                    file_ops::add_file(&tx, &file_path, &dst_path)?;
+                    "added to"
                 }
-                file_ops::replace_file(&tx, &file_path, &dst_path)?;
-            }else{
-                file_ops::add_file(&tx, &file_path, &dst_path)?;
-            }
+            };
 
             tx.commit()
                 .context("Failed to commit database transaction")?;
             
-            println!("  File '{name}' successfully added to pool");
+            println!("  File '{name}' successfully {operation} pool");
         }
         Commands::Info { db_path } => {
             let disks = db::get_disks(&db_path)
