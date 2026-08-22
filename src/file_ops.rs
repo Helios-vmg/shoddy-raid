@@ -192,12 +192,15 @@ pub fn add_directory(
         .context("Failed to collect directory entries")?;
     
     // Step 2: Sum all sizes and ensure there's enough space in the pool
-    let total_size: u64 = entries.iter().map(|e| e.1).sum();
     let logical_block_size = geom.logical_size();
     if logical_block_size == 0 {
         return Err(anyhow::anyhow!("Invalid pool geometry: logical block size is zero"));
     }
-    let required_superblocks = (total_size + logical_block_size - 1) / logical_block_size;
+    // Calculate superblocks needed for each file individually, then sum
+    let required_superblocks: u64 = entries.iter()
+        .filter(|(_, size, _)| *size > 0) // Only count files, not directories
+        .map(|(_, size, _)| (*size + logical_block_size - 1) / logical_block_size)
+        .sum();
     
     // Get available superblocks
     let available_superblocks = db::get_free_superblocks_with_tx(tx, required_superblocks as i64)
