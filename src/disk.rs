@@ -22,7 +22,7 @@ pub fn write_superblock(
     }
     
     // Calculate logical superblock size using PoolGeometry
-    let logical_superblock_size = geom.logical_size() as usize;
+    let logical_superblock_size = geom.superblock_size() as usize;
 
     if data.len() < logical_superblock_size{
         let copy = data.as_slice()[0..(logical_superblock_size - data.len())]
