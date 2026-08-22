@@ -10,7 +10,6 @@ mod utils;
 use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use anyhow::{Context, Result};
-use pool::PoolGeometry;
 use rusqlite::{Connection};
 
 #[derive(Parser)]
@@ -141,17 +140,9 @@ fn main() -> Result<()> {
             println!("  Directory '{name}' successfully added to pool");
         }
         Commands::Info { db_path } => {
-            let disks = db::get_disks(&db_path)
-                .context("Failed to retrieve pool information")?;
-            
-            if disks.is_empty() {
-                println!("Database exists but no disks are registered in this pool.");
-                return Ok(());
-            }
-
-            let num_disks = disks.len();
-            let min_disk_size = disks.iter().map(|d| d.size as u64).min().unwrap_or(0);
-            let geom = PoolGeometry::new(num_disks, min_disk_size);
+            let geom = db::get_geometry(&db_path)
+                .context("Failed to retrieve pool geometry")?;
+            let disks = db::get_disks(&db_path)?;
 
             let logical_size = geom.logical_size();
             let physical_size = geom.physical_size();
@@ -162,16 +153,16 @@ fn main() -> Result<()> {
             };
 
             // Check if there is disk size mismatch
-            let size_mismatch = disks.iter().any(|d| d.size as u64 != min_disk_size);
+            let size_mismatch = disks.iter().any(|d| d.size as u64 != geom.min_disk_size);
 
             println!("====================================================");
             println!("SHODDY-RAID POOL INFO");
             println!("====================================================");
             println!("Database Path: {:?}", db_path);
-            println!("Disk Count:    {} ({} Data, 1 Parity)", num_disks, num_disks - 1);
+            println!("Disk Count:    {} ({} Data, 1 Parity)", geom.num_disks, geom.num_disks - 1);
             if size_mismatch {
                 println!("WARNING:       Disks have mismatched sizes! Pool size is constrained");
-                println!("               by the smallest disk size: {}", utils::format_bytes(min_disk_size));
+                println!("               by the smallest disk size: {}", utils::format_bytes(geom.min_disk_size));
             }
             println!("----------------------------------------------------");
             println!("Geometry & Capacity:");

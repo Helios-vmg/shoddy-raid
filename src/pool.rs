@@ -20,6 +20,7 @@ impl PoolGeometry {
         }
     }
 
+    /// Returns the total number of superblocks in the pool.
     pub fn num_superblocks(&self) -> u64 {
         if self.num_disks < 2 {
             0
@@ -28,10 +29,16 @@ impl PoolGeometry {
         }
     }
 
+    pub fn superblock_size(&self) -> u64 {
+        BLOCK_SIZE * (self.num_disks - 1) as u64
+    }
+
+    /// Returns the physical size of the pool, which is the raw total capacity across all disks.
     pub fn physical_size(&self) -> u64 {
         self.num_superblocks() * BLOCK_SIZE * self.num_disks as u64
     }
 
+    /// Returns the logical size of the pool, which is the total usable data capacity.
     pub fn logical_size(&self) -> u64 {
         if self.num_disks < 2 {
             0

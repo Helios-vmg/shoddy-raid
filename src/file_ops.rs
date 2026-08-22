@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use rusqlite::Transaction;
 use crate::db;
-use crate::pool::PoolGeometry;
 use crate::utils;
 use blake3::Hasher;
 use std::io::{Read, Seek};
@@ -13,30 +12,19 @@ pub fn add_file(
     real_file_path: &PathBuf,
     path_components: &[&str],
 ) -> Result<()> {
-
-    // Get pool geometry from database
-    let disks = db::get_disks_with_tx(tx)
-        .context("Failed to retrieve pool information")?;
+    let geom = db::get_geometry_with_tx(tx)?;
     
-    if disks.is_empty() {
-        return Err(anyhow::anyhow!("No disks registered in the pool."));
-    }
-
-    let num_disks = disks.len();
-    let min_disk_size = disks.iter().map(|d| d.size as u64).min().unwrap_or(0);
-    let geom = PoolGeometry::new(num_disks, min_disk_size);
-
     let file_size = std::fs::metadata(real_file_path)
         .with_context(|| format!("Failed to read file metadata {:?}", real_file_path))?
         .len();
     println!("  File size: {}", utils::format_bytes(file_size));
 
     // Calculate number of superblocks needed
-    let logical_block_size = geom.logical_size();
-    if logical_block_size == 0 {
-        return Err(anyhow::anyhow!("Invalid pool geometry: logical block size is zero"));
+    let superblock_size = geom.superblock_size();
+    if superblock_size == 0 {
+        return Err(anyhow::anyhow!("Invalid pool geometry: superblock size is zero"));
     }
-    let required_superblocks = (file_size + logical_block_size - 1) / logical_block_size;
+    let required_superblocks = (file_size + superblock_size - 1) / superblock_size;
     println!("  Superblocks needed: {}", utils::add_thousands_separators(required_superblocks));
 
     // Allocate superblocks from the pool
@@ -45,7 +33,7 @@ pub fn add_file(
 
     // Open all disk files
     let mut disk_files: Vec<std::fs::File> = Vec::new();
-    for disk_info in &disks {
+    for disk_info in db::get_disks_with_tx(tx)? {
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -63,11 +51,11 @@ pub fn add_file(
 
     // Process each superblock
     for (i, &superblock_id) in allocated_ids.iter().enumerate() {
-        let start = (i as u64) * logical_block_size;
+        let start = (i as u64) * superblock_size;
         if start >= file_size {
             continue;
         }
-        let end = std::cmp::min(start + logical_block_size, file_size);
+        let end = std::cmp::min(start + superblock_size, file_size);
         
         let superblock_size = (end - start) as usize;
         

@@ -5,9 +5,6 @@ use std::path::{
     Path,
     PathBuf,
 };
-use std::fs::{
-    File,
-};
 use std::io::{
     Seek,
     SeekFrom,

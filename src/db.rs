@@ -5,8 +5,11 @@ use rusqlite::{
     Transaction,
 };
 use anyhow::{Context, Result};
-use crate::utils;
-use crate::fs;
+use crate::{
+    utils,
+    fs,
+    pool::PoolGeometry,
+};
 
 const BLOCK_SIZE: u64 = 516 * 1024; // 516 KiB
 
@@ -29,9 +32,6 @@ fn register_disks(
     for (id, disk_path) in disk_paths.iter().enumerate() {
         let abs_path = fs::semi_canonicalize(disk_path)
             .unwrap_or_else(|_| disk_path.clone());
-
-        let metadata = sfs::metadata(&abs_path)
-            .with_context(|| format!("Failed to read metadata of disk file {:?}", disk_path))?;
 
         let size = fs::forcefully_get_file_size(&abs_path)
             .with_context(|| format!("Failed to get size of disk file {:?}", disk_path))?;
@@ -155,6 +155,24 @@ pub fn get_free_superblocks_with_tx(
     Ok(superblock_ids)
 }
 
+pub fn get_geometry(db_path: &Path) -> Result<PoolGeometry> {
+    let mut conn = Connection::open(db_path)
+        .with_context(|| format!("Failed to open database at {:?}", db_path))?;
+    get_geometry_with_tx(&conn.transaction()?)
+}
+
+pub fn get_geometry_with_tx(tx: &Transaction) -> Result<PoolGeometry> {
+    let disks = get_disks_with_tx(tx)?;
+    if disks.is_empty() {
+        return Err(anyhow::anyhow!("No disks registered in the pool."));
+    }
+
+    let num_disks = disks.len();
+    let min_disk_size = disks.iter().map(|d| d.size as u64).min().unwrap_or(0);
+    
+    Ok(PoolGeometry::new(num_disks, min_disk_size))
+}
+
 /// Checks if there's enough space in the pool for the given file sizes.
 /// Returns true if there are enough free superblocks, false otherwise.
 /// 
@@ -165,29 +183,17 @@ pub fn has_enough_space_for_sizes_with_tx(
     tx: &Transaction,
     file_sizes: &[u64],
 ) -> Result<bool> {
-    use crate::pool::PoolGeometry;
+    let geom = get_geometry_with_tx(tx)?;
     
-    // Get pool geometry from database
-    let disks = get_disks_with_tx(tx)
-        .context("Failed to retrieve pool information")?;
+    let superblock_size = geom.superblock_size();
     
-    if disks.is_empty() {
-        return Err(anyhow::anyhow!("No disks registered in the pool."));
-    }
-
-    let num_disks = disks.len();
-    let min_disk_size = disks.iter().map(|d| d.size as u64).min().unwrap_or(0);
-    
-    let geom = PoolGeometry::new(num_disks, min_disk_size);
-    let logical_block_size = geom.logical_size();
-    
-    if logical_block_size == 0 {
+    if superblock_size == 0 {
         return Err(anyhow::anyhow!("Invalid pool geometry: logical block size is zero"));
     }
     
     // Calculate superblocks needed for each file individually, then sum
     let required_superblocks: u64 = file_sizes.iter()
-        .map(|size| (size + logical_block_size - 1) / logical_block_size)
+        .map(|size| (size + superblock_size - 1) / superblock_size)
         .sum();
     
     // Check if there are enough free superblocks
@@ -201,6 +207,7 @@ pub fn has_enough_space_for_sizes_with_tx(
 
 /// Returns the IDs of free superblocks without modifying the database.
 /// Returns an error if there are not enough free superblocks available.
+#[allow(dead_code)]
 pub fn get_free_superblocks(
     db_path: &Path,
     required: i64,
@@ -256,6 +263,7 @@ pub fn get_file_id_with_tx(tx: &Transaction, dst_path: &[&str]) -> Result<Option
 /// Looks up a file in the filesystem and returns its entry data.
 /// Returns Ok(Some((file_id, is_dir, is_virtual, file_id))) if found,
 /// Ok(None) if not found, or Err if the path refers to a directory.
+#[allow(dead_code)]
 pub fn get_file_id(
     db_path: &Path,
     dst_path: &[&str],
@@ -282,6 +290,7 @@ pub fn file_exists_with_tx(tx: &Transaction, dst_path: &[&str]) -> Result<bool> 
 
 /// Checks if a file with the given path exists in the database's filesystem.
 /// path_components is a vector of directory/file names representing the path.
+#[allow(dead_code)]
 pub fn file_exists(db_path: &Path, dst_path: &[&str]) -> Result<bool> {
     let mut conn = Connection::open(db_path)
         .with_context(|| format!("Failed to open database at {db_path:?}"))?;
@@ -375,6 +384,7 @@ pub fn commit_file_with_tx(tx: &Transaction, dst_path: &[&str], file_size: u64, 
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn commit_file(db_path: &Path, dst_path: &[&str], file_size: u64, file_hash: &str, allocated_ids: &[u64]) -> Result<()> {
     let mut conn = rusqlite::Connection::open(db_path)
         .with_context(|| format!("Failed to open database at {:?}", db_path))?;
