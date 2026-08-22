@@ -1,6 +1,7 @@
 mod db;
 mod disk;
 mod file_ops;
+mod fs;
 mod pool;
 mod sys;
 mod tree;

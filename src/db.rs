@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
-use std::fs;
+use std::fs as sfs;
 use rusqlite::{
     Connection,
     Transaction,
 };
 use anyhow::{Context, Result};
 use crate::utils;
+use crate::fs;
 
 const BLOCK_SIZE: u64 = 516 * 1024; // 516 KiB
 
@@ -26,10 +27,10 @@ fn register_disks(
     let mut disk_sizes = Vec::new();
 
     for (id, disk_path) in disk_paths.iter().enumerate() {
-        let abs_path = fs::canonicalize(disk_path)
+        let abs_path = fs::semi_canonicalize(disk_path)
             .unwrap_or_else(|_| disk_path.clone());
 
-        let metadata = fs::metadata(&abs_path)
+        let metadata = sfs::metadata(&abs_path)
             .with_context(|| format!("Failed to read metadata of disk file {:?}", disk_path))?;
 
         let size = metadata.len();
@@ -63,7 +64,7 @@ fn register_disks(
 pub fn create_pool(db_path: &Path, disk_paths: &[PathBuf]) -> Result<()> {
     if db_path.exists() {
         println!("Database file already exists. Re-initializing pool...");
-        fs::remove_file(db_path)
+        sfs::remove_file(db_path)
             .with_context(|| format!("Failed to remove existing database at {:?}", db_path))?;
     }
 
