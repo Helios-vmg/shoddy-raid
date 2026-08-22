@@ -153,6 +153,50 @@ pub fn get_free_superblocks_with_tx(
     Ok(superblock_ids)
 }
 
+/// Checks if there's enough space in the pool for the given file sizes.
+/// Returns true if there are enough free superblocks, false otherwise.
+/// 
+/// # Arguments
+/// * `tx` - Database transaction
+/// * `file_sizes` - Slice of file sizes in bytes
+pub fn has_enough_space_for_sizes_with_tx(
+    tx: &Transaction,
+    file_sizes: &[u64],
+) -> Result<bool> {
+    use crate::pool::PoolGeometry;
+    
+    // Get pool geometry from database
+    let disks = get_disks_with_tx(tx)
+        .context("Failed to retrieve pool information")?;
+    
+    if disks.is_empty() {
+        return Err(anyhow::anyhow!("No disks registered in the pool."));
+    }
+
+    let num_disks = disks.len();
+    let min_disk_size = disks.iter().map(|d| d.size as u64).min().unwrap_or(0);
+    
+    let geom = PoolGeometry::new(num_disks, min_disk_size);
+    let logical_block_size = geom.logical_size();
+    
+    if logical_block_size == 0 {
+        return Err(anyhow::anyhow!("Invalid pool geometry: logical block size is zero"));
+    }
+    
+    // Calculate superblocks needed for each file individually, then sum
+    let required_superblocks: u64 = file_sizes.iter()
+        .map(|size| (size + logical_block_size - 1) / logical_block_size)
+        .sum();
+    
+    // Check if there are enough free superblocks
+    let mut stmt = tx.prepare(
+        "SELECT COUNT(*) FROM superblocks WHERE physical_file_id IS NULL"
+    )?;
+    let available_superblocks: i64 = stmt.query_row((), |row| row.get(0))?;
+    
+    Ok(available_superblocks >= required_superblocks as i64)
+}
+
 /// Returns the IDs of free superblocks without modifying the database.
 /// Returns an error if there are not enough free superblocks available.
 pub fn get_free_superblocks(

@@ -144,18 +144,6 @@ pub fn add_directory(
     use std::fs;
     use std::path::Path;
 
-    // Get pool geometry from database
-    let disks = db::get_disks_with_tx(tx)
-        .context("Failed to retrieve pool information")?;
-    
-    if disks.is_empty() {
-        return Err(anyhow::anyhow!("No disks registered in the pool."));
-    }
-
-    let num_disks = disks.len();
-    let min_disk_size = disks.iter().map(|d| d.size as u64).min().unwrap_or(0);
-    let geom = PoolGeometry::new(num_disks, min_disk_size);
-
     // Step 1: Recursively list all directory entries with their relative paths and sizes
     let mut entries: Vec<(PathBuf, u64, bool)> = Vec::new(); // (relative_path, size, is_dir)
     
@@ -191,27 +179,9 @@ pub fn add_directory(
     collect_entries(dir_path, &PathBuf::new(), &mut entries)
         .context("Failed to collect directory entries")?;
     
-    // Step 2: Sum all sizes and ensure there's enough space in the pool
-    let logical_block_size = geom.logical_size();
-    if logical_block_size == 0 {
-        return Err(anyhow::anyhow!("Invalid pool geometry: logical block size is zero"));
-    }
-    // Calculate superblocks needed for each file individually, then sum
-    let required_superblocks: u64 = entries.iter()
-        .filter(|(_, size, _)| *size > 0) // Only count files, not directories
-        .map(|(_, size, _)| (*size + logical_block_size - 1) / logical_block_size)
-        .sum();
-    
-    // Get available superblocks
-    let available_superblocks = db::get_free_superblocks_with_tx(tx, required_superblocks as i64)
-        .with_context(|| format!("Not enough space in pool. Required: {}, Available: {}", required_superblocks, 0))?;
-    
-    if (available_superblocks.len() as i64) < (required_superblocks as i64) {
-        return Err(anyhow::anyhow!(
-            "Not enough space in pool. Required: {} superblocks, Available: {}",
-            required_superblocks,
-            available_superblocks.len() as i64
-        ));
+    let sizes = entries.iter().map(|(_, size, _)| *size).collect::<Vec<u64>>();
+    if !db::has_enough_space_for_sizes_with_tx(tx, &sizes)? {
+        return Err(anyhow::anyhow!("Not enough space in pool."));
     }
     
     // Step 3: Determine destination location of each entry
