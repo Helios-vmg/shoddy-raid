@@ -216,7 +216,7 @@ pub fn add_directory(
     
     // Step 3: Determine destination location of each entry
     // Step 4: Check if destinations exist (unless force is specified)
-    for (rel_path, _, is_dir) in &entries {
+    for (rel_path, _, _) in &entries {
         let mut full_dst_path = dst_path.to_vec();
         for component in rel_path.components() {
             let str_val = component.as_os_str().to_str().unwrap_or("");
