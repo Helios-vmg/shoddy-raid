@@ -208,38 +208,27 @@ pub fn add_directory(
     
     // Step 5: For every file, create or replace as necessary
     for (rel_path, _, is_dir) in entries {
+        let mut full_dst_path = dst_path.to_vec();
+        for component in rel_path.components() {
+            let str_val = component.as_os_str().to_str().unwrap_or("");
+            full_dst_path.push(str_val);
+        }
+
         if is_dir {
             // Create directory entry in database
-            let mut full_dst_path = dst_path.to_vec();
-            for component in rel_path.components() {
-                let str_val = component.as_os_str().to_str().unwrap_or("");
-                full_dst_path.push(str_val);
-            }
-            
             db::ensure_path(tx, &full_dst_path)
                 .with_context(|| format!("Failed to create directory {:?}", utils::join_path(&full_dst_path)))?;
-        } else {
-            // Add or replace file
-            let mut full_dst_path = dst_path.to_vec();
-            for component in rel_path.components() {
-                let str_val = component.as_os_str().to_str().unwrap_or("");
-                full_dst_path.push(str_val);
-            }
-            
-            let src_path = dir_path.join(&rel_path);
-            
-            if db::file_exists_with_tx(tx, &full_dst_path)? {
-                if !force {
-                    return Err(anyhow::anyhow!(
-                        "File '{}' unexpectedly exists. Use --force to overwrite.",
-                        utils::join_path(&full_dst_path).display()
-                    ));
-                }
-                replace_file(tx, &src_path, &full_dst_path)?;
-            } else {
-                add_file(tx, &src_path, &full_dst_path)?;
-            }
+            continue;
         }
+
+        // Add or replace file
+        let src_path = dir_path.join(&rel_path);
+        
+        (if db::file_exists_with_tx(tx, &full_dst_path)? {
+            replace_file
+        } else {
+            add_file
+        })(tx, &src_path, &full_dst_path)?
     }
     
     Ok(())
