@@ -33,7 +33,8 @@ fn register_disks(
         let metadata = sfs::metadata(&abs_path)
             .with_context(|| format!("Failed to read metadata of disk file {:?}", disk_path))?;
 
-        let size = metadata.len();
+        let size = fs::forcefully_get_file_size(&abs_path)
+            .with_context(|| format!("Failed to get size of disk file {:?}", disk_path))?;
         let path_str = abs_path.to_string_lossy().to_string();
 
         let serial = crate::sys::get_disk_serial(&abs_path)

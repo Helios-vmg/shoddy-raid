@@ -1,5 +1,17 @@
-use anyhow::Result;
-use std::path::{Path, PathBuf};
+use anyhow::{
+    Result, Context
+};
+use std::path::{
+    Path,
+    PathBuf,
+};
+use std::fs::{
+    File,
+};
+use std::io::{
+    Seek,
+    SeekFrom,
+};
 
 pub fn absolutize(path: &Path) -> Result<PathBuf> {
     Ok(if path.is_absolute() {
@@ -30,4 +42,15 @@ pub fn semi_canonicalize(path: &Path) -> Result<PathBuf> {
     }
 
     Ok(result)
+}
+
+pub fn forcefully_get_file_size(path: &Path) -> Result<u64> {
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("Failed to open file {:?}", path))?;
+
+    file.seek(SeekFrom::End(0))
+        .with_context(|| format!("Failed to seek to end of file {:?}", path))?;
+
+    file.stream_position()
+        .with_context(|| format!("Failed to get position in file {:?}", path))
 }
