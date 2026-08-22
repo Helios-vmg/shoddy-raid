@@ -29,8 +29,9 @@ impl PoolGeometry {
         }
     }
 
+    /// Returns the usable size per superblock.
     pub fn superblock_size(&self) -> u64 {
-        BLOCK_SIZE * (self.num_disks - 1) as u64
+        DATA_SIZE * (self.num_disks - 1) as u64
     }
 
     /// Returns the physical size of the pool, which is the raw total capacity across all disks.

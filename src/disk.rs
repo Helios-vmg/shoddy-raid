@@ -25,9 +25,10 @@ pub fn write_superblock(
     let logical_superblock_size = geom.superblock_size() as usize;
 
     if data.len() < logical_superblock_size{
-        let copy = data.as_slice()[0..(logical_superblock_size - data.len())]
-            .to_vec();
-        data.extend_from_slice(&copy);
+        while data.len() < logical_superblock_size{
+            data.extend_from_slice(&data.as_slice().to_vec());
+        }
+        data.resize(logical_superblock_size, 0);
     }
 
     // Split data into 4096-byte subblocks
