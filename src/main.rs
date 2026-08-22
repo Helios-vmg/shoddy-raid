@@ -51,6 +51,22 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Add a directory to the pool
+    AddDirectory {
+        /// Path to the SQLite database
+        db_path: PathBuf,
+
+        /// Path to the directory to add
+        dir_path: PathBuf,
+
+        /// Name to store the directory as in the filesystem
+        #[arg(short, long)]
+        name: String,
+
+        /// Overwrite existing files
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -101,6 +117,27 @@ fn main() -> Result<()> {
                 .context("Failed to commit database transaction")?;
             
             println!("  File '{name}' successfully {operation} pool");
+        }
+        Commands::AddDirectory { db_path, dir_path, name, force } => {
+            println!("Adding directory to pool:");
+            println!("  Database:  {:?}", db_path);
+            println!("  Directory: {:?}", dir_path);
+            println!("  Name:      {}", name);
+
+            let dst_path = utils::split_path(&name);
+
+            let mut conn = Connection::open(&db_path)
+                .with_context(|| format!("Failed to open database at {db_path:?}"))?;
+            let tx = conn.transaction()
+                .context("Failed to start database transaction")?;
+
+            file_ops::add_directory(&tx, &dir_path, &dst_path, force)
+                .context("Failed to add directory to pool")?;
+
+            tx.commit()
+                .context("Failed to commit database transaction")?;
+            
+            println!("  Directory '{name}' successfully added to pool");
         }
         Commands::Info { db_path } => {
             let disks = db::get_disks(&db_path)
