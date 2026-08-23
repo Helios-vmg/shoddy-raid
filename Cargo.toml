@@ -1,3 +1,6 @@
 [workspace]
-members = ["crates/shoddy-raid"]
+members = [
+    "crates/shoddy-raid",
+    "crates/vdisk",
+]
 resolver = "2"
