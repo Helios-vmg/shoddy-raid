@@ -6,19 +6,21 @@ This is a simple virtual disk library intended for use in file systems without n
 
 # File format
 
-struct File\{  
-    Header header;  
-    u64 block\_table\[header.block\_count\];  
-    Block blocks\[header.allocated\_block\_count\];  
-\};  
-  
-struct Header\{ // Padded to 4K  
-    u8 magic\_number\[4\]; // "GNAF"  
-    u32 version;  
-    u64 block\_count;  
-    u64 allocated\_block\_count;  
-\};  
-  
-typedef u8 Block\[1 \<\< 20\];
+```
+struct File{
+    Header header;
+    u64 block_table[header.block_count];
+    Block blocks[header.allocated_block_count];
+};
+
+struct Header{ // Padded to 4K
+    u8 magic_number[4]; // "GNAF"
+    u32 version;
+    u64 block_count;
+    u64 allocated_block_count;
+};
+
+typedef u8 Block[1 << 20];
+```
 
 Integers are encoded in little endian.
