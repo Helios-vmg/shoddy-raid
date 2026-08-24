@@ -1,16 +1,9 @@
-mod db;
-mod disk;
-mod file_ops;
-mod fs;
-mod pool;
-mod sys;
-mod tree;
 mod utils;
 
 use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use anyhow::{Context, Result};
-use rusqlite::{Connection};
+use libsraid::LibSRaid;
 
 #[derive(Parser)]
 #[command(name = "shoddy-raid")]
@@ -96,7 +89,7 @@ fn main() -> Result<()> {
             }
 
             println!("Creating pool database at: {:?}", db_path);
-            db::create_pool(&db_path, &disk_paths)
+            LibSRaid::create(&db_path, &disk_paths)
                 .context("Failed to create raid pool")?;
             
             println!("Successfully initialized pool with {} disks.", disk_paths.len());
@@ -107,30 +100,12 @@ fn main() -> Result<()> {
             println!("  File:      {:?}", file_path);
             println!("  Name:      {}", name);
 
-            let dst_path = utils::split_path(&name);
+            let dst_path = PathBuf::from(&name);
 
-            let mut conn = Connection::open(&db_path)
-                .with_context(|| format!("Failed to open database at {db_path:?}"))?;
-            let tx = conn.transaction()
-                .context("Failed to start database transaction")?;
-
-            let operation = {
-                if db::file_exists_with_tx(&tx, &dst_path)? {
-                    if !force {
-                        return Err(anyhow::anyhow!("File '{}' already exists in the pool", name));
-                    }
-                    file_ops::replace_file(&tx, &file_path, &dst_path)?;
-                    "replaced in"
-                }else{
-                    file_ops::add_file(&tx, &file_path, &dst_path)?;
-                    "added to"
-                }
-            };
-
-            tx.commit()
-                .context("Failed to commit database transaction")?;
-            
-            println!("  File '{name}' successfully {operation} pool");
+            let mut raid = LibSRaid::open(&db_path)
+                .with_context(|| format!("Failed to open pool at {db_path:?}"))?;
+            raid.add_file(&file_path, &dst_path, force)
+                .context("Failed to add file to pool")?;
         }
         Commands::AddDirectory { db_path, dir_path, name, force } => {
             println!("Adding directory to pool:");
@@ -138,23 +113,25 @@ fn main() -> Result<()> {
             println!("  Directory: {:?}", dir_path);
             println!("  Name:      {}", name);
 
-            let dst_path = utils::split_path(&name);
+            let dst_path = PathBuf::from(&name);
 
-            let mut conn = Connection::open(&db_path)
-                .with_context(|| format!("Failed to open database at {db_path:?}"))?;
-            let tx = conn.transaction()
-                .context("Failed to start database transaction")?;
-
-            file_ops::add_directory(&tx, &dir_path, &dst_path, force)
+            let mut raid = LibSRaid::open(&db_path)
+                .with_context(|| format!("Failed to open pool at {db_path:?}"))?;
+            raid.add_directory(&dir_path, &dst_path, force)
                 .context("Failed to add directory to pool")?;
-
-            tx.commit()
-                .context("Failed to commit database transaction")?;
-            
-            println!("  Directory '{name}' successfully added to pool");
         }
         Commands::Scrub { db_path } => {
-            pool::scrub(&db_path)?;
+            let mut raid = LibSRaid::open(&db_path)
+                .with_context(|| format!("Failed to open pool at {db_path:?}"))?;
+            let result = raid.scrub(false)
+                .context("Failed to scrub pool")?;
+            
+            println!("Scrub completed:");
+            println!("  Repairable or repaired files: {}", result.repairable_or_repaired_files);
+            println!("  Repairable or repaired blocks: {}", result.repairable_or_repaired_blocks);
+            println!("  Damaged files: {}", result.damaged_files.len());
+            println!("  Raw bytes read: {}", utils::format_bytes(result.raw_bytes_read));
+            println!("  Elapsed seconds: {:.3}", result.elapsed_seconds);
         }
         Commands::CreateVdisk { vdisk_path, size } => {
             // Parse the size string (e.g., "1G", "500M")
@@ -171,45 +148,37 @@ fn main() -> Result<()> {
             println!("  Vdisk successfully created");
         }
         Commands::Info { db_path } => {
-            let geom = db::get_geometry(&db_path)
-                .context("Failed to retrieve pool geometry")?;
-            let disks = db::get_disks(&db_path)?;
-
-            let logical_size = geom.logical_size();
-            let physical_size = geom.physical_size();
-            let efficiency = if physical_size > 0 {
-                (logical_size as f64 / physical_size as f64) * 100.0
-            } else {
-                0.0
-            };
+            let mut raid = LibSRaid::open(&db_path)
+                .with_context(|| format!("Failed to open pool at {db_path:?}"))?;
+            let info = raid.info()
+                .context("Failed to retrieve pool info")?;
 
             // Check if there is disk size mismatch
-            let size_mismatch = disks.iter().any(|d| d.size as u64 != geom.min_disk_size);
+            let size_mismatch = info.disks.iter().any(|d| d.size != info.smallest_disk_raw_bytes);
 
             println!("====================================================");
             println!("SHODDY-RAID POOL INFO");
             println!("====================================================");
             println!("Database Path: {:?}", db_path);
-            println!("Disk Count:    {} ({} Data, 1 Parity)", geom.num_disks, geom.num_disks - 1);
+            println!("Disk Count:    {} ({} Data, 1 Parity)", info.total_disks, info.total_disks - 1);
             if size_mismatch {
                 println!("WARNING:       Disks have mismatched sizes! Pool size is constrained");
-                println!("               by the smallest disk size: {}", utils::format_bytes(geom.min_disk_size));
+                println!("               by the smallest disk size: {}", utils::format_bytes(info.smallest_disk_raw_bytes));
             }
             println!("----------------------------------------------------");
             println!("Geometry & Capacity:");
-            println!("  Block size:          516 KiB (528,384 bytes)");
-            println!("  Total Superblocks:   {}", utils::add_thousands_separators(geom.num_superblocks()));
-            println!("  Logical Capacity:    {}", utils::format_bytes(logical_size));
-            println!("  Physical Capacity:   {}", utils::format_bytes(physical_size));
-            println!("  Space Efficiency:    {:.1}%", efficiency);
+            println!("  Block size:          {} KiB ({})", info.raw_block_size / 1024, info.raw_block_size);
+            println!("  Total Superblocks:   {}", utils::add_thousands_separators(info.total_superblocks));
+            println!("  Logical Capacity:    {}", utils::format_bytes(info.usable_pool_bytes));
+            println!("  Physical Capacity:   {}", utils::format_bytes(info.raw_pool_bytes));
+            println!("  Space Efficiency:    {:.1}%", info.efficiency);
             println!("----------------------------------------------------");
             println!("Registered Disks:");
-            for disk in disks {
+            for disk in &info.disks {
                 println!(
-                    "  ID {}: {} (Size: {}, Block Size: {} KiB, Serial: {})",
-                    disk.id,
-                    disk.path,
-                    utils::format_bytes(disk.size as u64),
+                    "  Path: {} (Size: {}, Block Size: {} KiB, Serial: {})",
+                    disk.path.display(),
+                    utils::format_bytes(disk.size),
                     disk.block_size / 1024,
                     disk.serial.as_deref().unwrap_or("N/A")
                 );

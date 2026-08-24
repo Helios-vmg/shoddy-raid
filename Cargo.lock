@@ -347,6 +347,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "libsraid"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "hex",
+ "rusqlite",
+ "udev",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "libudev-sys"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -495,6 +507,7 @@ dependencies = [
  "blake3",
  "clap",
  "hex",
+ "libsraid",
  "rusqlite",
  "udev",
  "vdisk",

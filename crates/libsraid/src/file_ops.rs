@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use anyhow::{Context, Result};
-use rusqlite::Transaction;
+use rusqlite::{Connection, Transaction};
 use crate::db;
 use crate::utils;
 use blake3::Hasher;
@@ -8,6 +8,17 @@ use std::io::{Read, Seek};
 
 /// Adds a file to the pool after verifying it doesn't already exist.
 pub fn add_file(
+    conn: &mut Connection,
+    real_file_path: &PathBuf,
+    path_components: &[&str],
+) -> Result<()> {
+    let tx = conn.transaction()?;
+    let result = add_file_with_tx(&tx, real_file_path, path_components);
+    tx.commit()?;
+    result
+}
+
+fn add_file_with_tx(
     tx: &Transaction,
     real_file_path: &PathBuf,
     path_components: &[&str],
@@ -108,22 +119,47 @@ pub fn delete_file(
 
 /// Replaces an existing file in the pool with a new one.
 pub fn replace_file(
+    conn: &mut Connection,
+    real_file_path: &PathBuf,
+    path_components: &[&str],
+) -> Result<()> {
+    let tx = conn.transaction()?;
+    delete_file(&tx, path_components)?;
+    add_file_with_tx(&tx, real_file_path, path_components)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn replace_file_with_tx(
     tx: &Transaction,
     real_file_path: &PathBuf,
     path_components: &[&str],
 ) -> Result<()> {
     delete_file(tx, path_components)?;
-    add_file(tx, real_file_path, path_components)
+    add_file_with_tx(tx, real_file_path, path_components)?;
+    Ok(())
 }
 
 /// Recursively adds a directory to the pool.
 /// 
 /// # Arguments
-/// * `tx` - Database transaction
+/// * `conn` - Database connection
 /// * `dir_path` - Path to the local directory to add
 /// * `dst_path` - Path components where to store in the pool
 /// * `force` - If true, overwrite existing files; otherwise fail if any destination exists
 pub fn add_directory(
+    conn: &mut Connection,
+    dir_path: &PathBuf,
+    dst_path: &[&str],
+    force: bool,
+) -> Result<()> {
+    let tx = conn.transaction()?;
+    add_directory_with_tx(&tx, dir_path, dst_path, force)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn add_directory_with_tx(
     tx: &Transaction,
     dir_path: &PathBuf,
     dst_path: &[&str],
@@ -201,7 +237,7 @@ pub fn add_directory(
             let str_val = component.as_os_str().to_str().unwrap_or("");
             full_dst_path.push(str_val);
         }
-
+        
         if is_dir {
             // Create directory entry in database
             db::ensure_path(tx, &full_dst_path)
@@ -212,11 +248,11 @@ pub fn add_directory(
         // Add or replace file
         let src_path = dir_path.join(&rel_path);
         
-        (if db::file_exists_with_tx(tx, &full_dst_path)? {
-            replace_file
+        if db::file_exists_with_tx(tx, &full_dst_path)? {
+            replace_file_with_tx(tx, &src_path, &full_dst_path)?;
         } else {
-            add_file
-        })(tx, &src_path, &full_dst_path)?
+            add_file_with_tx(tx, &src_path, &full_dst_path)?;
+        }
     }
     
     Ok(())

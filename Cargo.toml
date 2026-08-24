@@ -2,5 +2,6 @@
 members = [
     "crates/shoddy-raid",
     "crates/vdisk",
+    "crates/libsraid",
 ]
 resolver = "2"

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+#[allow(dead_code)]
 pub fn parse_size(size_str: &str) -> Result<u64, String> {
     let size_str = size_str.trim().to_uppercase();
     
@@ -62,7 +63,6 @@ pub fn split_path(name: &str) -> Vec<&str> {
         .collect()
 }
 
-#[allow(dead_code)]
 pub fn join_path(components: &[&str]) -> PathBuf {
     components.join("/").into()
 }

@@ -9,6 +9,7 @@ anyhow = "1.0"
 blake3 = "1.5"
 hex = "0.4"
 vdisk = { path = "../vdisk" }
+libsraid = { path = "../libsraid" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 udev = "0.9"
