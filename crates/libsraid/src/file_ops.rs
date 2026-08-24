@@ -28,7 +28,6 @@ fn add_file_with_tx(
     let file_size = std::fs::metadata(real_file_path)
         .with_context(|| format!("Failed to read file metadata {:?}", real_file_path))?
         .len();
-    println!("  File size: {}", utils::format_bytes(file_size));
 
     // Calculate number of superblocks needed
     let superblock_size = geom.superblock_size();
@@ -36,7 +35,6 @@ fn add_file_with_tx(
         return Err(anyhow::anyhow!("Invalid pool geometry: superblock size is zero"));
     }
     let required_superblocks = (file_size + superblock_size - 1) / superblock_size;
-    println!("  Superblocks needed: {}", utils::add_thousands_separators(required_superblocks));
 
     // Allocate superblocks from the pool
     let allocated_ids = db::get_free_superblocks_with_tx(tx, required_superblocks as i64)
@@ -70,8 +68,6 @@ fn add_file_with_tx(
         
         let superblock_size = (end - start) as usize;
         
-        println!("  Processing superblock {i}: {superblock_size} bytes (bytes {start}-{end})");
-        
         // Read superblock data from file
         let mut superblock_data = vec![0u8; superblock_size];
         file.seek(std::io::SeekFrom::Start(start))
@@ -87,7 +83,6 @@ fn add_file_with_tx(
     
     // Finalize with database transaction
     let final_hash = hex::encode(hasher.finalize().as_bytes());
-    println!("  File hash: {final_hash}");
     
     db::commit_file_with_tx(tx, &path_components, file_size, &final_hash, &allocated_ids)
         .context("Failed to commit file to database")?;

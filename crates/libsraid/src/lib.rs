@@ -131,7 +131,7 @@ impl LibSRaid {
             .collect();
 
         let source_pathbuf = source.to_path_buf();
-        let result = if db::file_exists(&mut self.conn, &path_components)? {
+        if db::file_exists(&mut self.conn, &path_components)? {
             if !force {
                 return Err(anyhow::anyhow!(
                     "File '{}' already exists in the pool",
@@ -139,13 +139,9 @@ impl LibSRaid {
                 ));
             }
             file_ops::replace_file(&mut self.conn, &source_pathbuf, &path_components)?;
-            "replaced in"
         } else {
             file_ops::add_file(&mut self.conn, &source_pathbuf, &path_components)?;
-            "added to"
-        };
-
-        println!("  File '{}' successfully {} pool", destination.display(), result);
+        }
         Ok(())
     }
 
@@ -159,8 +155,6 @@ impl LibSRaid {
         let source_pathbuf = source.to_path_buf();
         file_ops::add_directory(&mut self.conn, &source_pathbuf, &path_components, force)
             .context("Failed to add directory to pool")?;
-
-        println!("  Directory '{}' successfully added to pool", destination.display());
         Ok(())
     }
 
@@ -400,16 +394,10 @@ fn register_disks(
         let path_str = abs_path.to_string_lossy().to_string();
 
         let serial = sys::get_disk_serial(&abs_path)
-            .unwrap_or_else(|err| {
-                eprintln!("Warning: Failed to retrieve serial number for {:?}: {}", abs_path, err);
-                None
-            });
+            .unwrap_or_else(|_| None);
 
         let block_size = sys::get_block_size(&abs_path)
-            .unwrap_or_else(|err| {
-                eprintln!("Warning: Failed to retrieve block size for {:?}: {}", abs_path, err);
-                None
-            });
+            .unwrap_or_else(|_| None);
 
         tx.execute(
             "INSERT INTO disks (id, path, serial, size, block_size) VALUES (?1, ?2, ?3, ?4, ?5)",
