@@ -118,7 +118,7 @@ pub fn has_enough_space_for_sizes_with_tx(
     
     // Calculate superblocks needed for each file individually, then sum
     let required_superblocks: u64 = file_sizes.iter()
-        .map(|size| (size + superblock_size - 1) / superblock_size)
+        .map(|size| size.div_ceil(superblock_size))
         .sum();
     
     // Check if there are enough free superblocks
@@ -182,7 +182,7 @@ pub fn file_exists_with_tx(tx: &Transaction, dst_path: &[&str]) -> Result<bool> 
 /// path_components is a vector of directory/file names representing the path.
 pub fn file_exists(conn: &mut Connection, dst_path: &[&str]) -> Result<bool> {
     let tx = conn.transaction()?;
-    Ok(file_exists_with_tx(&tx, dst_path)?)
+    file_exists_with_tx(&tx, dst_path)
 }
 
 /// Adds a new physical file record and returns its ID.
@@ -253,15 +253,15 @@ pub fn ensure_path(
 
 pub fn commit_file_with_tx(tx: &Transaction, dst_path: &[&str], file_size: u64, file_hash: &str, allocated_ids: &[u64]) -> Result<()> {
     // Add physical file record
-    let physical_file_id = add_physical_file(&tx, file_size, &file_hash)
+    let physical_file_id = add_physical_file(tx, file_size, file_hash)
         .context("Failed to add physical file record")?;
     
     // Assign superblocks to this file
-    assign_superblocks(&tx, physical_file_id, allocated_ids)
+    assign_superblocks(tx, physical_file_id, allocated_ids)
         .context("Failed to assign superblocks")?;
     
     // Create intermediate directories and add file entry
-    let parent_id = ensure_path(&tx, dst_path)
+    let parent_id = ensure_path(tx, dst_path)
         .context("Failed to ensure path")?;
     tx.execute(
         "INSERT INTO fs (name, parent, is_dir, is_virtual, file_id, all_or_nothing) VALUES (?1, ?2, 0, 0, ?3, 1)",

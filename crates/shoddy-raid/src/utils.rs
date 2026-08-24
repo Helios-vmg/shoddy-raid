@@ -47,7 +47,7 @@ pub fn add_thousands_separators(n: u64) -> String {
     let mut result = String::new();
     let len = s.len();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(c);
@@ -57,7 +57,7 @@ pub fn add_thousands_separators(n: u64) -> String {
 
 #[allow(dead_code)]
 pub fn split_path(name: &str) -> Vec<&str> {
-    name.split(|c| c == '/' || c == '\\')
+    name.split(['/', '\\'])
         .filter(|s| !s.is_empty())
         .collect()
 }

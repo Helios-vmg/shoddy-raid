@@ -16,6 +16,7 @@ struct File{
 struct Header{ // Padded to 4K
     u8 magic_number[4]; // "GNAF"
     u32 version;
+    u8 serial[32];
     u64 block_count;
     u64 allocated_block_count;
 };

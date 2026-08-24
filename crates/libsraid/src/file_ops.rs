@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::path::{
+    Path,
+    PathBuf,
+};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, Transaction};
 use crate::db;
@@ -34,7 +37,7 @@ fn add_file_with_tx(
     if superblock_size == 0 {
         return Err(anyhow::anyhow!("Invalid pool geometry: superblock size is zero"));
     }
-    let required_superblocks = (file_size + superblock_size - 1) / superblock_size;
+    let required_superblocks = file_size.div_ceil(superblock_size);
 
     // Allocate superblocks from the pool
     let allocated_ids = db::get_free_superblocks_with_tx(tx, required_superblocks as i64)
@@ -84,7 +87,7 @@ fn add_file_with_tx(
     // Finalize with database transaction
     let final_hash = hex::encode(hasher.finalize().as_bytes());
     
-    db::commit_file_with_tx(tx, &path_components, file_size, &final_hash, &allocated_ids)
+    db::commit_file_with_tx(tx, path_components, file_size, &final_hash, &allocated_ids)
         .context("Failed to commit file to database")?;
     
     Ok(())
@@ -98,7 +101,7 @@ pub fn delete_file(
     tx: &Transaction,
     path_components: &[&str],
 ) -> Result<()> {
-    let file_id = db::get_file_id_with_tx(&tx, path_components)
+    let file_id = db::get_file_id_with_tx(tx, path_components)
         .with_context(|| format!("Failed to find file at path {:?}", utils::join_path(path_components)))?;
 
     let file_id = match file_id {
@@ -109,7 +112,7 @@ pub fn delete_file(
         }
     };
 
-    db::delete_file_with_tx(&tx, file_id)
+    db::delete_file_with_tx(tx, file_id)
 }
 
 /// Replaces an existing file in the pool with a new one.
@@ -144,7 +147,7 @@ fn replace_file_with_tx(
 /// * `force` - If true, overwrite existing files; otherwise fail if any destination exists
 pub fn add_directory(
     conn: &mut Connection,
-    dir_path: &PathBuf,
+    dir_path: &Path,
     dst_path: &[&str],
     force: bool,
 ) -> Result<()> {
@@ -156,7 +159,7 @@ pub fn add_directory(
 
 fn add_directory_with_tx(
     tx: &Transaction,
-    dir_path: &PathBuf,
+    dir_path: &Path,
     dst_path: &[&str],
     force: bool,
 ) -> Result<()> {

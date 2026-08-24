@@ -237,17 +237,17 @@ impl LibSRaid {
                 for subblock_idx in 0..SUBBLOCKS_PER_BLOCK {
                     // Collect all subblocks for this VSSB
                     let mut vssb_subblocks: Vec<Vec<u8>> = Vec::new();
-                    for disk_idx in 0..geom.num_disks {
+                    for superblock in superblock_data.iter().take(geom.num_disks) {
                         let subblock_offset = subblock_idx * SUBBLOCK_SIZE as usize;
-                        let subblock = superblock_data[disk_idx][subblock_offset..subblock_offset + SUBBLOCK_SIZE as usize].to_vec();
+                        let subblock = superblock[subblock_offset..subblock_offset + SUBBLOCK_SIZE as usize].to_vec();
                         vssb_subblocks.push(subblock);
                     }
 
                     // Collect hashes for this VSSB
                     let mut vssb_hashes: Vec<[u8; 32]> = Vec::new();
-                    for disk_idx in 0..geom.num_disks {
-                        let hash_offset = (DATA_SIZE as usize + subblock_idx * 32) as usize;
-                        let hash_bytes: [u8; 32] = superblock_data[disk_idx][hash_offset..hash_offset + 32]
+                    for superblock in superblock_data.iter().take(geom.num_disks) {
+                        let hash_offset = DATA_SIZE as usize + subblock_idx * 32;
+                        let hash_bytes: [u8; 32] = superblock[hash_offset..hash_offset + 32]
                             .try_into()
                             .expect("Failed to extract hash");
                         vssb_hashes.push(hash_bytes);
@@ -290,9 +290,8 @@ impl LibSRaid {
 
                             // Calculate correct data using parity
                             let mut corrected = [0u8; SUBBLOCK_SIZE as usize];
-                            for disk in 0..geom.num_disks {
+                            for (disk, data) in vssb_subblocks.iter().enumerate().take(geom.num_disks) {
                                 if disk != damaged_disk && disk != parity_disk {
-                                    let data = &vssb_subblocks[disk];
                                     for j in 0..SUBBLOCK_SIZE as usize {
                                         corrected[j] ^= data[j];
                                     }
@@ -396,10 +395,10 @@ fn register_disks(
         let path_str = abs_path.to_string_lossy().to_string();
 
         let serial = sys::get_disk_serial(&abs_path)
-            .unwrap_or_else(|_| None);
+            .unwrap_or(None);
 
         let block_size = sys::get_block_size(&abs_path)
-            .unwrap_or_else(|_| None);
+            .unwrap_or(None);
 
         tx.execute(
             "INSERT INTO disks (id, path, serial, size, block_size) VALUES (?1, ?2, ?3, ?4, ?5)",

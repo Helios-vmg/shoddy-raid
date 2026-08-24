@@ -1,10 +1,13 @@
 use anyhow::Result;
+use rand::rngs::StdRng;
+use rand::{RngCore, SeedableRng};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 const MAGIC: [u8; 4] = *b"GNAF";
 const VERSION: u32 = 1;
+const SERIAL_SIZE: usize = 32;
 const BLOCK_SIZE: usize = 1 << 20; // 1 MiB
 const BLOCK_SIZE64: u64 = BLOCK_SIZE as u64;
 const HEADER_SIZE: usize = 4096;
@@ -24,15 +27,17 @@ pub struct VDisk {
 struct VDiskHeader {
     magic: [u8; 4],
     version: u32,
+    serial: [u8; SERIAL_SIZE],
     block_count: u64,
     allocated_block_count: u64,
 }
 
 impl VDiskHeader {
-    fn new(block_count: u64) -> Self {
+    fn new(block_count: u64, serial: [u8; SERIAL_SIZE]) -> Self {
         Self {
             magic: MAGIC,
             version: VERSION,
+            serial,
             block_count,
             allocated_block_count: 0,
         }
@@ -45,12 +50,14 @@ impl VDiskHeader {
 
         let (magic, bytes) = bytes.split_at(MAGIC.len());
         let (version, bytes) = bytes.split_at(size_of::<u32>());
+        let (serial, bytes) = bytes.split_at(SERIAL_SIZE);
         let (block_count, bytes) = bytes.split_at(size_of::<u64>());
         let (allocated_block_count, _) = bytes.split_at(size_of::<u64>());
 
         Ok(Self {
             magic: magic.try_into()?,
             version: u32::from_le_bytes(version.try_into()?),
+            serial: serial.try_into()?,
             block_count: u64::from_le_bytes(block_count.try_into()?),
             allocated_block_count: u64::from_le_bytes(allocated_block_count.try_into()?),
         })
@@ -60,11 +67,13 @@ impl VDiskHeader {
 
         let (magic, bytes) = ret.split_at_mut(MAGIC.len());
         let (version, bytes) = bytes.split_at_mut(size_of::<u32>());
+        let (serial, bytes) = bytes.split_at_mut(SERIAL_SIZE);
         let (block_count, bytes) = bytes.split_at_mut(size_of::<u64>());
         let (allocated_block_count, _) = bytes.split_at_mut(size_of::<u64>());
 
         magic.copy_from_slice(&self.magic);
         version.copy_from_slice(&self.version.to_le_bytes());
+        serial.copy_from_slice(&self.serial);
         block_count.copy_from_slice(&self.block_count.to_le_bytes());
         allocated_block_count.copy_from_slice(&self.allocated_block_count.to_le_bytes());
 
@@ -93,7 +102,7 @@ impl VDisk {
         let header = VDiskHeader::from_bytes(&header)?;
 
         // Validate magic number
-        if &header.magic != &MAGIC {
+        if header.magic != MAGIC {
             return Ok(false);
         }
 
@@ -160,6 +169,10 @@ impl VDisk {
             return Err(anyhow::anyhow!("File already exists"));
         }
 
+        // Generate random serial number
+        let mut serial = [0u8; SERIAL_SIZE];
+        StdRng::from_entropy().fill_bytes(&mut serial);
+
         // Calculate block counts
         let block_count = size.div_ceil(BLOCK_SIZE64);
 
@@ -177,7 +190,7 @@ impl VDisk {
         file.set_len(file_size)?;
 
         // Write header
-        let header = VDiskHeader::new(block_count).to_bytes();
+        let header = VDiskHeader::new(block_count, serial).to_bytes();
 
         file.seek(SeekFrom::Start(0))?;
         file.write_all(&header)?;
@@ -194,12 +207,26 @@ impl VDisk {
         })
     }
 
+    /// Returns the serial number as "GNAF" followed by uppercase hex
+    pub fn serial(&mut self) -> Result<String> {
+        let header = self.read_header()?;
+        let hex: String = header.serial.iter().map(|b| format!("{:02X}", b)).collect();
+        Ok(format!("GNAF{}", hex))
+    }
+
+    fn read_header(&mut self) -> Result<VDiskHeader> {
+        self.file.seek(SeekFrom::Start(0))?;
+        let mut header_bytes = [0u8; HEADER_SIZE];
+        self.file.read_exact(&mut header_bytes)?;
+        VDiskHeader::from_bytes(&header_bytes)
+    }
+
     fn block_table_size(blocks: u64) -> u64 {
         blocks * size_of::<u64>() as u64
     }
 
     /// Reads a block into the provided buffer
-    pub fn read_block_with_offset(
+    fn read_block_with_offset(
         &mut self,
         block_index: u64,
         offset: usize,
@@ -288,7 +315,7 @@ impl VDisk {
     }
 
     /// Writes a block with offset, allocating if necessary
-    pub fn write_block_with_offset(
+    fn write_block_with_offset(
         &mut self,
         block_index: u64,
         offset: usize,
@@ -346,7 +373,7 @@ impl VDisk {
     }
 
     /// Commits changes to the file header and block table
-    pub fn commit_changes(&mut self) -> Result<()> {
+    fn commit_changes(&mut self) -> Result<()> {
         if self.uncommitted_blocks.is_empty() {
             return Ok(());
         }
@@ -372,7 +399,7 @@ impl VDisk {
     }
 
     /// Writes data to the virtual disk from the provided buffer
-    pub fn write(&mut self, offset: u64, src: &[u8]) -> Result<usize> {
+    fn write(&mut self, offset: u64, src: &[u8]) -> Result<usize> {
         if src.is_empty() {
             return Ok(0);
         }
