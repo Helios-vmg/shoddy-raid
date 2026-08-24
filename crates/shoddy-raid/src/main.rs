@@ -104,8 +104,12 @@ fn main() -> Result<()> {
 
             let mut raid = LibSRaid::open(&db_path)
                 .with_context(|| format!("Failed to open pool at {db_path:?}"))?;
-            raid.add_file(&file_path, &dst_path, force)
+            let result = raid.add_file(&file_path, &dst_path, force)
                 .context("Failed to add file to pool")?;
+            
+            let result = if !result { "added to" } else { "replaced in" };
+
+            println!("  File '{}' successfully {} pool", dst_path.display(), result);
         }
         Commands::AddDirectory { db_path, dir_path, name, force } => {
             println!("Adding directory to pool:");

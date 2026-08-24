@@ -124,14 +124,16 @@ impl LibSRaid {
     }
 
     /// Adds a file to the pool
-    pub fn add_file(&mut self, source: &Path, destination: &Path, force: bool) -> Result<()> {
+    /// Returns true if the file was replaced, false if it was added
+    pub fn add_file(&mut self, source: &Path, destination: &Path, force: bool) -> Result<bool> {
         let path_components: Vec<&str> = destination
             .components()
             .filter_map(|c| c.as_os_str().to_str())
             .collect();
 
         let source_pathbuf = source.to_path_buf();
-        if db::file_exists(&mut self.conn, &path_components)? {
+        let existed = db::file_exists(&mut self.conn, &path_components)?;
+        if existed {
             if !force {
                 return Err(anyhow::anyhow!(
                     "File '{}' already exists in the pool",
@@ -142,7 +144,7 @@ impl LibSRaid {
         } else {
             file_ops::add_file(&mut self.conn, &source_pathbuf, &path_components)?;
         }
-        Ok(())
+        Ok(existed)
     }
 
     /// Adds a directory to the pool
