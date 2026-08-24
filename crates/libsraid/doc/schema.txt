@@ -2,6 +2,7 @@ create table disks(
 	id integer primary key,
 	path text not null,
 	serial text,
+	device_type text not null,
 	size integer not null,
 	block_size integer
 );

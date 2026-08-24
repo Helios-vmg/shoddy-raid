@@ -3,7 +3,7 @@ use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::Path;
 
 const MAGIC: [u8; 4] = *b"GNAF";
 const VERSION: u32 = 1;
@@ -17,6 +17,7 @@ const ALLOCATED_BLOCKS_OFFSET: usize = 16;
 /// A virtual disk that stores data in a file
 pub struct VDisk {
     file: File,
+    serial: [u8; SERIAL_SIZE],
     block_count: u64,
     allocated_block_count: u64,
     block_pointers: Vec<u64>,
@@ -83,7 +84,7 @@ impl VDiskHeader {
 
 impl VDisk {
     /// Checks if a file is a valid vdisk by validating magic number, version, and file size
-    pub fn is_vdisk(path: &PathBuf) -> Result<bool> {
+    pub fn is_vdisk(path: &Path) -> Result<bool> {
         let mut file = File::open(path)?;
 
         // Get file size
@@ -113,13 +114,14 @@ impl VDisk {
 
         // Calculate expected file size
         let block_table_size = header.block_count * size_of::<u64>() as u64;
-        let expected_size = HEADER_SIZE64 + block_table_size + header.allocated_block_count * BLOCK_SIZE64;
+        let expected_size =
+            HEADER_SIZE64 + block_table_size + header.allocated_block_count * BLOCK_SIZE64;
 
         Ok(file_size == expected_size)
     }
 
     /// Opens an existing virtual disk file
-    pub fn open(path: &PathBuf) -> Result<Self> {
+    pub fn open(path: &Path) -> Result<Self> {
         let mut file = OpenOptions::new().read(true).write(true).open(path)?;
 
         // Read header
@@ -159,11 +161,12 @@ impl VDisk {
             allocated_block_count: header.allocated_block_count,
             block_pointers,
             uncommitted_blocks: Vec::new(),
+            serial: header.serial,
         })
     }
 
     /// Creates a new virtual disk file with the specified size
-    pub fn create(path: &PathBuf, size: u64) -> Result<Self> {
+    pub fn create(path: &Path, size: u64) -> Result<Self> {
         // Check if file already exists
         if path.exists() {
             return Err(anyhow::anyhow!("File already exists"));
@@ -190,7 +193,7 @@ impl VDisk {
         file.set_len(file_size)?;
 
         // Write header
-        let header = VDiskHeader::new(block_count, serial).to_bytes();
+        let header = VDiskHeader::new(block_count, serial.clone()).to_bytes();
 
         file.seek(SeekFrom::Start(0))?;
         file.write_all(&header)?;
@@ -204,21 +207,14 @@ impl VDisk {
             allocated_block_count: 0,
             block_pointers: vec![0; block_count as usize],
             uncommitted_blocks: Vec::new(),
+            serial,
         })
     }
 
     /// Returns the serial number as "GNAF" followed by uppercase hex
-    pub fn serial(&mut self) -> Result<String> {
-        let header = self.read_header()?;
-        let hex: String = header.serial.iter().map(|b| format!("{:02X}", b)).collect();
-        Ok(format!("GNAF{}", hex))
-    }
-
-    fn read_header(&mut self) -> Result<VDiskHeader> {
-        self.file.seek(SeekFrom::Start(0))?;
-        let mut header_bytes = [0u8; HEADER_SIZE];
-        self.file.read_exact(&mut header_bytes)?;
-        VDiskHeader::from_bytes(&header_bytes)
+    pub fn serial(&self) -> String {
+        let hex: String = self.serial.iter().map(|b| format!("{:02X}", b)).collect();
+        format!("GNAF{}", hex)
     }
 
     fn block_table_size(blocks: u64) -> u64 {
@@ -399,7 +395,7 @@ impl VDisk {
     }
 
     /// Writes data to the virtual disk from the provided buffer
-    fn write(&mut self, offset: u64, src: &[u8]) -> Result<usize> {
+    pub fn write(&mut self, offset: u64, src: &[u8]) -> Result<usize> {
         if src.is_empty() {
             return Ok(0);
         }
@@ -436,6 +432,10 @@ impl VDisk {
         self.commit_changes()?;
 
         Ok(bytes_written)
+    }
+
+    pub fn size(&self) -> u64 {
+        BLOCK_SIZE64 * self.block_count
     }
 }
 

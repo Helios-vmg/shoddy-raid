@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
-use crate::pool::{PoolGeometry, SUBBLOCK_SIZE, BLOCK_SIZE};
-use std::fs::File;
-use std::io::Write;
-use std::io::Seek;
+use crate::{
+    device::Device,
+    pool::{BLOCK_SIZE, PoolGeometry, SUBBLOCK_SIZE},
+};
+use anyhow::Result;
 
 /// Writes a superblock to the pool.
 /// Pads the data to the logical superblock size by repeating it.
@@ -10,7 +10,7 @@ pub fn write_superblock(
     superblock_id: u64,
     mut data: Vec<u8>,
     geom: &PoolGeometry,
-    disk_files: &mut [File],
+    disk_files: &mut [Box<dyn Device>],
 ) -> Result<()> {
     // Defensive check: ensure disk_files.len() matches geom.num_disks
     if disk_files.len() != geom.num_disks {
@@ -20,12 +20,12 @@ pub fn write_superblock(
             disk_files.len()
         ));
     }
-    
+
     // Calculate logical superblock size using PoolGeometry
     let logical_superblock_size = geom.superblock_size() as usize;
 
-    if data.len() < logical_superblock_size{
-        while data.len() < logical_superblock_size{
+    if data.len() < logical_superblock_size {
+        while data.len() < logical_superblock_size {
             data.extend_from_slice(&data.as_slice().to_vec());
         }
         data.resize(logical_superblock_size, 0);
@@ -41,14 +41,14 @@ pub fn write_superblock(
     // Horizontal layout: fill each disk completely before moving to the next
     let num_data_disks = geom.num_disks - 1;
     let subblocks_per_disk = 128;
-    
+
     let mut disk_data: Vec<Vec<Vec<u8>>> = vec![vec![]; num_data_disks];
-    
+
     for (i, subblock) in subblocks.into_iter().enumerate() {
         let disk_index = i / subblocks_per_disk;
         disk_data[disk_index].push(subblock);
     }
-    
+
     // Create parity data by XORing all data disks
     let mut parity: Vec<Vec<u8>> = Vec::with_capacity(subblocks_per_disk);
     for i in 0..subblocks_per_disk {
@@ -61,10 +61,10 @@ pub fn write_superblock(
         }
         parity.push(parity_block.to_vec());
     }
-    
+
     // Move parity into the back of disk_data
     disk_data.push(parity);
-    
+
     // Compute BLAKE3 hashes for each subblock and append to each disk
     for disk in disk_data.iter_mut() {
         let mut hash_subblock = vec![0u8; 32 * 128]; // 32 bytes per hash * 128 subblocks
@@ -74,21 +74,15 @@ pub fn write_superblock(
         }
         disk.push(hash_subblock);
     }
-    
+
     // Write each disk's data to its corresponding file
     let block_offset = superblock_id * BLOCK_SIZE;
-    
-    for (disk_idx, disk_data) in disk_data.iter().enumerate() {
-        let file = &mut disk_files[disk_idx];
-        
-        file.seek(std::io::SeekFrom::Start(block_offset))
-            .with_context(|| format!("Failed to seek in disk {}", disk_idx))?;
 
+    for (disk_idx, disk_data) in disk_data.iter().enumerate() {
         for subblock_data in disk_data.iter() {
-            file.write_all(subblock_data)
-                .with_context(|| format!("Failed to write to disk {}", disk_idx))?;
+            disk_files[disk_idx].write(block_offset, &subblock_data)?;
         }
     }
-    
+
     Ok(())
 }

@@ -1,5 +1,5 @@
-use std::path::Path;
 use anyhow::Result;
+use std::path::Path;
 
 #[cfg(target_os = "linux")]
 pub fn get_disk_serial(path: &Path) -> Result<Option<String>> {
@@ -10,7 +10,7 @@ pub fn get_disk_serial(path: &Path) -> Result<Option<String>> {
 
     let metadata = fs::metadata(path)?;
     let file_type = metadata.file_type();
-    
+
     let dev_type = if file_type.is_block_device() {
         DeviceType::Block
     } else if file_type.is_char_device() {
@@ -26,7 +26,8 @@ pub fn get_disk_serial(path: &Path) -> Result<Option<String>> {
     }
 
     let device = Device::from_devnum(dev_type, devnum)?;
-    let serial = device.property_value("ID_SERIAL_SHORT")
+    let serial = device
+        .property_value("ID_SERIAL_SHORT")
         .map(|val| val.to_string_lossy().into_owned());
 
     Ok(serial)
@@ -41,7 +42,7 @@ pub fn get_block_size(path: &Path) -> Result<Option<u64>> {
 
     let metadata = fs::metadata(path)?;
     let file_type = metadata.file_type();
-    
+
     let dev_type = if file_type.is_block_device() {
         DeviceType::Block
     } else if file_type.is_char_device() {
@@ -56,7 +57,8 @@ pub fn get_block_size(path: &Path) -> Result<Option<u64>> {
     }
 
     let device = Device::from_devnum(dev_type, devnum)?;
-    let sector_size = device.property_value("ID_SECTOR_SIZE")
+    let sector_size = device
+        .property_value("ID_SECTOR_SIZE")
         .and_then(|val| val.to_string_lossy().into_owned().parse::<u64>().ok());
 
     Ok(sector_size)
@@ -66,14 +68,20 @@ pub fn get_block_size(path: &Path) -> Result<Option<u64>> {
 pub fn get_disk_serial(path: &Path) -> Result<Option<String>> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
     use windows_sys::Win32::System::IO::DeviceIoControl;
     use windows_sys::Win32::System::Ioctl::{
-        IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_DEVICE_DESCRIPTOR, STORAGE_PROPERTY_QUERY,
-        StorageDeviceProperty, PropertyStandardQuery,
+        IOCTL_STORAGE_QUERY_PROPERTY, PropertyStandardQuery, STORAGE_DEVICE_DESCRIPTOR,
+        STORAGE_PROPERTY_QUERY, StorageDeviceProperty,
     };
 
-    let path_wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let path_wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
 
     let handle = unsafe {
         CreateFileW(
@@ -156,13 +164,20 @@ pub fn get_disk_serial(path: &Path) -> Result<Option<String>> {
 pub fn get_block_size(path: &Path) -> Result<Option<u64>> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
     use windows_sys::Win32::System::IO::DeviceIoControl;
     use windows_sys::Win32::System::Ioctl::{
-        IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, DISK_GEOMETRY_EX, STORAGE_DEVICE_NUMBER, IOCTL_STORAGE_GET_DEVICE_NUMBER,
+        DISK_GEOMETRY_EX, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_STORAGE_GET_DEVICE_NUMBER,
+        STORAGE_DEVICE_NUMBER,
     };
 
-    let path_wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let path_wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
 
     let handle = unsafe {
         CreateFileW(

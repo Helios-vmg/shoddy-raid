@@ -1,13 +1,10 @@
-use std::path::{
-    Path,
-    PathBuf,
-};
-use anyhow::{Context, Result};
-use rusqlite::{Connection, Transaction};
 use crate::db;
 use crate::utils;
+use anyhow::{Context, Result};
 use blake3::Hasher;
+use rusqlite::{Connection, Transaction};
 use std::io::{Read, Seek};
+use std::path::{Path, PathBuf};
 
 /// Adds a file to the pool after verifying it doesn't already exist.
 pub fn add_file(
@@ -27,7 +24,7 @@ fn add_file_with_tx(
     path_components: &[&str],
 ) -> Result<()> {
     let geom = db::get_geometry_with_tx(tx)?;
-    
+
     let file_size = std::fs::metadata(real_file_path)
         .with_context(|| format!("Failed to read file metadata {:?}", real_file_path))?
         .len();
@@ -35,7 +32,9 @@ fn add_file_with_tx(
     // Calculate number of superblocks needed
     let superblock_size = geom.superblock_size();
     if superblock_size == 0 {
-        return Err(anyhow::anyhow!("Invalid pool geometry: superblock size is zero"));
+        return Err(anyhow::anyhow!(
+            "Invalid pool geometry: superblock size is zero"
+        ));
     }
     let required_superblocks = file_size.div_ceil(superblock_size);
 
@@ -44,15 +43,7 @@ fn add_file_with_tx(
         .with_context(|| format!("Failed to allocate {} superblocks", required_superblocks))?;
 
     // Open all disk files
-    let mut disk_files: Vec<std::fs::File> = Vec::new();
-    for disk_info in db::get_disks_with_tx(tx)? {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&disk_info.path)
-            .with_context(|| format!("Failed to open disk file {}", disk_info.path))?;
-        disk_files.push(file);
-    }
+    let mut disk_files = db::open_disks_with_tx(tx)?;
 
     // Open the file for reading in chunks
     let mut file = std::fs::File::open(real_file_path)
@@ -68,28 +59,28 @@ fn add_file_with_tx(
             continue;
         }
         let end = std::cmp::min(start + superblock_size, file_size);
-        
+
         let superblock_size = (end - start) as usize;
-        
+
         // Read superblock data from file
         let mut superblock_data = vec![0u8; superblock_size];
         file.seek(std::io::SeekFrom::Start(start))
             .with_context(|| format!("Failed to seek in file {real_file_path:?}"))?;
         file.read_exact(&mut superblock_data)
             .with_context(|| format!("Failed to read file {real_file_path:?}"))?;
-        
+
         // Update hasher with superblock data
         hasher.update(&superblock_data);
-        
+
         crate::disk::write_superblock(superblock_id, superblock_data, &geom, &mut disk_files)?;
     }
-    
+
     // Finalize with database transaction
     let final_hash = hex::encode(hasher.finalize().as_bytes());
-    
+
     db::commit_file_with_tx(tx, path_components, file_size, &final_hash, &allocated_ids)
         .context("Failed to commit file to database")?;
-    
+
     Ok(())
 }
 
@@ -97,12 +88,13 @@ fn add_file_with_tx(
 /// If no other files reference the same physical file, it will also delete
 /// the physical file record and reset the superblocks.
 /// Returns an error if the file is marked as virtual.
-pub fn delete_file(
-    tx: &Transaction,
-    path_components: &[&str],
-) -> Result<()> {
-    let file_id = db::get_file_id_with_tx(tx, path_components)
-        .with_context(|| format!("Failed to find file at path {:?}", utils::join_path(path_components)))?;
+pub fn delete_file(tx: &Transaction, path_components: &[&str]) -> Result<()> {
+    let file_id = db::get_file_id_with_tx(tx, path_components).with_context(|| {
+        format!(
+            "Failed to find file at path {:?}",
+            utils::join_path(path_components)
+        )
+    })?;
 
     let file_id = match file_id {
         Some(id) => id,
@@ -139,7 +131,7 @@ fn replace_file_with_tx(
 }
 
 /// Recursively adds a directory to the pool.
-/// 
+///
 /// # Arguments
 /// * `conn` - Database connection
 /// * `dir_path` - Path to the local directory to add
@@ -168,24 +160,22 @@ fn add_directory_with_tx(
 
     // Step 1: Recursively list all directory entries with their relative paths and sizes
     let mut entries: Vec<(PathBuf, u64, bool)> = Vec::new(); // (relative_path, size, is_dir)
-    
+
     fn collect_entries(
         base_path: &Path,
         current_path: &Path,
         entries: &mut Vec<(PathBuf, u64, bool)>,
     ) -> Result<()> {
         let full_path = base_path.join(current_path);
-        
+
         for entry in fs::read_dir(&full_path)
-            .with_context(|| format!("Failed to read directory {:?}", full_path))? 
+            .with_context(|| format!("Failed to read directory {:?}", full_path))?
         {
             let entry = entry?;
             let path = entry.path();
             let file_type = entry.file_type()?;
-            let rel_path = path.strip_prefix(base_path)
-                .unwrap_or(&path)
-                .to_path_buf();
-            
+            let rel_path = path.strip_prefix(base_path).unwrap_or(&path).to_path_buf();
+
             if file_type.is_dir() {
                 collect_entries(base_path, &rel_path, entries)?;
                 entries.push((rel_path, 0, true));
@@ -194,18 +184,21 @@ fn add_directory_with_tx(
                 entries.push((rel_path, size, false));
             }
         }
-        
+
         Ok(())
     }
-    
+
     collect_entries(dir_path, &PathBuf::new(), &mut entries)
         .context("Failed to collect directory entries")?;
-    
-    let sizes = entries.iter().map(|(_, size, _)| *size).collect::<Vec<u64>>();
+
+    let sizes = entries
+        .iter()
+        .map(|(_, size, _)| *size)
+        .collect::<Vec<u64>>();
     if !db::has_enough_space_for_sizes_with_tx(tx, &sizes)? {
         return Err(anyhow::anyhow!("Not enough space in pool."));
     }
-    
+
     // Step 3: Determine destination location of each entry
     // Step 4: Check if destinations exist (unless force is specified)
     for (rel_path, _, _) in &entries {
@@ -214,8 +207,8 @@ fn add_directory_with_tx(
             let str_val = component.as_os_str().to_str().unwrap_or("");
             full_dst_path.push(str_val);
         }
-        
-        if force{
+
+        if force {
             continue;
         }
 
@@ -227,7 +220,7 @@ fn add_directory_with_tx(
             ));
         }
     }
-    
+
     // Step 5: For every file, create or replace as necessary
     for (rel_path, _, is_dir) in entries {
         let mut full_dst_path = dst_path.to_vec();
@@ -235,23 +228,27 @@ fn add_directory_with_tx(
             let str_val = component.as_os_str().to_str().unwrap_or("");
             full_dst_path.push(str_val);
         }
-        
+
         if is_dir {
             // Create directory entry in database
-            db::ensure_path(tx, &full_dst_path)
-                .with_context(|| format!("Failed to create directory {:?}", utils::join_path(&full_dst_path)))?;
+            db::ensure_path(tx, &full_dst_path).with_context(|| {
+                format!(
+                    "Failed to create directory {:?}",
+                    utils::join_path(&full_dst_path)
+                )
+            })?;
             continue;
         }
 
         // Add or replace file
         let src_path = dir_path.join(&rel_path);
-        
+
         if db::file_exists_with_tx(tx, &full_dst_path)? {
             replace_file_with_tx(tx, &src_path, &full_dst_path)?;
         } else {
             add_file_with_tx(tx, &src_path, &full_dst_path)?;
         }
     }
-    
+
     Ok(())
 }

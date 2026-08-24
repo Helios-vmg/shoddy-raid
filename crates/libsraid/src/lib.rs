@@ -1,4 +1,5 @@
 mod db;
+mod device;
 mod disk;
 mod file_ops;
 mod fs;
@@ -6,15 +7,14 @@ mod pool;
 mod sys;
 mod utils;
 
-use std::path::{Path, PathBuf};
-use std::time::Instant;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
-use std::io::{Read, Seek, Write};
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 pub const BLOCK_SIZE: u64 = 516 * 1024; // 516 KiB
-pub const DATA_SIZE: u64 = 512 * 1024;   // 512 KiB
-pub const HASH_SIZE: u64 = 4 * 1024;     // 4 KiB
+pub const DATA_SIZE: u64 = 512 * 1024; // 512 KiB
+pub const HASH_SIZE: u64 = 4 * 1024; // 4 KiB
 pub const SUBBLOCK_SIZE: u64 = 4 * 1024; // 4 KiB
 pub const SUBBLOCKS_PER_BLOCK: usize = 128;
 pub const HASH_BYTES: usize = 32;
@@ -64,10 +64,14 @@ impl LibSRaid {
     /// Creates a new pool with the given database path and disk paths
     pub fn create(db_path: &Path, disk_paths: &[PathBuf]) -> Result<Self> {
         if disk_paths.is_empty() {
-            return Err(anyhow::anyhow!("At least 2 disks are required to create a RAID pool."));
+            return Err(anyhow::anyhow!(
+                "At least 2 disks are required to create a RAID pool."
+            ));
         }
         if disk_paths.len() < 2 {
-            return Err(anyhow::anyhow!("A RAID pool requires at least 2 disks (including 1 parity disk)."));
+            return Err(anyhow::anyhow!(
+                "A RAID pool requires at least 2 disks (including 1 parity disk)."
+            ));
         }
 
         if db_path.exists() {
@@ -111,7 +115,10 @@ impl LibSRaid {
     /// Opens an existing pool
     pub fn open(db_path: &Path) -> Result<Self> {
         if !db_path.exists() {
-            return Err(anyhow::anyhow!("Database file {:?} does not exist", db_path));
+            return Err(anyhow::anyhow!(
+                "Database file {:?} does not exist",
+                db_path
+            ));
         }
 
         let conn = Connection::open(db_path)
@@ -164,7 +171,9 @@ impl LibSRaid {
     pub fn scrub(&mut self, dry_run: bool) -> Result<ScrubResult> {
         let start_time = Instant::now();
 
-        let tx = self.conn.transaction()
+        let tx = self
+            .conn
+            .transaction()
             .context("Failed to start database transaction")?;
 
         let geom = db::get_geometry_with_tx(&tx)?;
@@ -174,22 +183,15 @@ impl LibSRaid {
             .context("Failed to commit database transaction")?;
 
         // Open all disk files
-        let mut disk_files: Vec<std::fs::File> = Vec::new();
-        for disk_info in &disks {
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(!dry_run)
-                .open(&disk_info.path)
-                .with_context(|| format!("Failed to open disk file {}", disk_info.path))?;
-            disk_files.push(file);
-        }
+        let mut disk_files = db::open_disks_from_diskinfo(&disks)?;
 
         // Read all physical files from database
         let mut physical_files: Vec<(i64, u64, String)> = Vec::new();
-        let mut stmt = self.conn.prepare("SELECT id, size, hash FROM physical_files")?;
-        let physical_file_iter = stmt.query_map((), |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, size, hash FROM physical_files")?;
+        let physical_file_iter =
+            stmt.query_map((), |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
 
         for pf in physical_file_iter {
             physical_files.push(pf?);
@@ -208,9 +210,10 @@ impl LibSRaid {
 
             // Read superblock assignments
             let mut superblocks_stmt = self.conn.prepare(
-                "SELECT id FROM superblocks WHERE physical_file_id = ?1 ORDER BY file_order"
+                "SELECT id FROM superblocks WHERE physical_file_id = ?1 ORDER BY file_order",
             )?;
-            let superblock_iter = superblocks_stmt.query_map((physical_file_id,), |row| row.get(0))?;
+            let superblock_iter =
+                superblocks_stmt.query_map((physical_file_id,), |row| row.get(0))?;
             let mut superblocks: Vec<u64> = Vec::new();
             for sb in superblock_iter {
                 superblocks.push(sb?);
@@ -223,12 +226,12 @@ impl LibSRaid {
                 // Read entire superblock from all disks
                 let mut superblock_data: Vec<Vec<u8>> = Vec::new();
                 for disk_file in &mut disk_files {
-                    disk_file.seek(std::io::SeekFrom::Start(superblock_offset))
-                        .with_context(|| format!("Failed to seek in disk for superblock {}", superblock_id))?;
-
                     let mut block_data = vec![0u8; BLOCK_SIZE as usize];
-                    disk_file.read_exact(&mut block_data)
-                        .with_context(|| format!("Failed to read block for superblock {}", superblock_id))?;
+                    disk_file
+                        .read(superblock_offset, &mut block_data)
+                        .with_context(|| {
+                            format!("Failed to read block for superblock {}", superblock_id)
+                        })?;
                     superblock_data.push(block_data);
                     raw_bytes_read += BLOCK_SIZE;
                 }
@@ -239,7 +242,9 @@ impl LibSRaid {
                     let mut vssb_subblocks: Vec<Vec<u8>> = Vec::new();
                     for superblock in superblock_data.iter().take(geom.num_disks) {
                         let subblock_offset = subblock_idx * SUBBLOCK_SIZE as usize;
-                        let subblock = superblock[subblock_offset..subblock_offset + SUBBLOCK_SIZE as usize].to_vec();
+                        let subblock = superblock
+                            [subblock_offset..subblock_offset + SUBBLOCK_SIZE as usize]
+                            .to_vec();
                         vssb_subblocks.push(subblock);
                     }
 
@@ -290,7 +295,9 @@ impl LibSRaid {
 
                             // Calculate correct data using parity
                             let mut corrected = [0u8; SUBBLOCK_SIZE as usize];
-                            for (disk, data) in vssb_subblocks.iter().enumerate().take(geom.num_disks) {
+                            for (disk, data) in
+                                vssb_subblocks.iter().enumerate().take(geom.num_disks)
+                            {
                                 if disk != damaged_disk && disk != parity_disk {
                                     for j in 0..SUBBLOCK_SIZE as usize {
                                         corrected[j] ^= data[j];
@@ -300,12 +307,17 @@ impl LibSRaid {
 
                             // Write corrected data to disk
                             let corrected_data = &corrected[..];
-                            let disk_file = &mut disk_files[damaged_disk];
-                            let seek_pos = (superblock_offset as usize + subblock_idx * SUBBLOCK_SIZE as usize) as u64;
-                            disk_file.seek(std::io::SeekFrom::Start(seek_pos))
-                                .with_context(|| format!("Failed to seek in disk {} for repair", damaged_disk))?;
-                            disk_file.write_all(corrected_data)
-                                .with_context(|| format!("Failed to write corrected data to disk {}", damaged_disk))?;
+                            let seek_pos = (superblock_offset as usize
+                                + subblock_idx * SUBBLOCK_SIZE as usize)
+                                as u64;
+                            disk_files[damaged_disk]
+                                .write(seek_pos, corrected_data)
+                                .with_context(|| {
+                                    format!(
+                                        "Failed to write corrected data to disk {}",
+                                        damaged_disk
+                                    )
+                                })?;
 
                             repairable_or_repaired_blocks += 1;
                         }
@@ -332,7 +344,9 @@ impl LibSRaid {
 
     /// Returns information about the pool
     pub fn info(&mut self) -> Result<InfoResult> {
-        let tx = self.conn.transaction()
+        let tx = self
+            .conn
+            .transaction()
             .context("Failed to start database transaction")?;
 
         let geom = db::get_geometry_with_tx(&tx)?;
@@ -380,29 +394,25 @@ impl LibSRaid {
     }
 }
 
-fn register_disks(
-    tx: &rusqlite::Transaction,
-    disk_paths: &[PathBuf],
-) -> Result<u64> {
+fn register_disks(tx: &rusqlite::Transaction, disk_paths: &[PathBuf]) -> Result<u64> {
     let mut disk_sizes = Vec::new();
 
     for (id, disk_path) in disk_paths.iter().enumerate() {
-        let abs_path = fs::semi_canonicalize(disk_path)
-            .unwrap_or_else(|_| disk_path.clone());
+        let abs_path = fs::semi_canonicalize(disk_path).unwrap_or_else(|_| disk_path.clone());
 
-        let size = fs::forcefully_get_file_size(&abs_path)
-            .with_context(|| format!("Failed to get size of disk file {:?}", disk_path))?;
         let path_str = abs_path.to_string_lossy().to_string();
 
-        let serial = sys::get_disk_serial(&abs_path)
-            .unwrap_or(None);
+        // Try to open as vdisk first, then fall back to block device
+        let device = device::open_device(&abs_path)?;
 
-        let block_size = sys::get_block_size(&abs_path)
-            .unwrap_or(None);
+        let serial = device.serial()?;
+        let device_type = device.device_type();
+        let size = device.size()?;
+        let block_size = device.block_size()?;
 
         tx.execute(
-            "INSERT INTO disks (id, path, serial, size, block_size) VALUES (?1, ?2, ?3, ?4, ?5)",
-            (id as i64 + 1, &path_str, &serial, size as i64, block_size),
+            "INSERT INTO disks (id, path, serial, device_type, size, block_size) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            (id as i64 + 1, &path_str, &serial, &device_type, size as i64, block_size as i64),
         )
         .with_context(|| format!("Failed to insert disk {:?}", path_str))?;
 
