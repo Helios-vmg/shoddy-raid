@@ -8,6 +8,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 anyhow = "1.0"
 blake3 = "1.5"
 hex = "0.4"
+vdisk = { path = "../vdisk" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 udev = "0.9"

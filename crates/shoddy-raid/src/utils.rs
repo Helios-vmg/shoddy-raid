@@ -1,5 +1,29 @@
 use std::path::PathBuf;
 
+pub fn parse_size(size_str: &str) -> Result<u64, String> {
+    let size_str = size_str.trim().to_uppercase();
+    
+    if size_str.is_empty() {
+        return Err("Size cannot be empty".to_string());
+    }
+
+    let (num_part, unit_part) = size_str.split_at(size_str.find(|c: char| c.is_alphabetic()).unwrap_or(size_str.len()));
+    
+    let num: u64 = num_part.parse()
+        .map_err(|_| format!("Invalid number: '{}'", num_part))?;
+    
+    let multiplier = match unit_part {
+        "" | "B" => 1,
+        "K" | "KB" | "KIB" => 1024,
+        "M" | "MB" | "MIB" => 1024 * 1024,
+        "G" | "GB" | "GIB" => 1024 * 1024 * 1024,
+        "T" | "TB" | "TIB" => 1024 * 1024 * 1024 * 1024,
+        _ => return Err(format!("Invalid unit: '{}'. Valid units: B, K/KIB/KB, M/MIB/MB, G/GIB/GB, T/TIB/TB", unit_part)),
+    };
+
+    Ok(num * multiplier)
+}
+
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;

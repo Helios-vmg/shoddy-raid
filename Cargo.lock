@@ -497,6 +497,7 @@ dependencies = [
  "hex",
  "rusqlite",
  "udev",
+ "vdisk",
  "windows-sys 0.52.0",
 ]
 

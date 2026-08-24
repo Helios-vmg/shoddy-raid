@@ -72,6 +72,15 @@ enum Commands {
         /// Path to the SQLite database
         db_path: PathBuf,
     },
+    /// Create a new virtual disk file
+    CreateVdisk {
+        /// Path to the vdisk file to create
+        vdisk_path: PathBuf,
+
+        /// Size of the vdisk (e.g., "1G", "500M")
+        #[arg(short, long)]
+        size: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -146,6 +155,20 @@ fn main() -> Result<()> {
         }
         Commands::Scrub { db_path } => {
             pool::scrub(&db_path)?;
+        }
+        Commands::CreateVdisk { vdisk_path, size } => {
+            // Parse the size string (e.g., "1G", "500M")
+            let size_bytes = utils::parse_size(&size)
+                .map_err(|e| anyhow::anyhow!("Invalid size format: {}", e))?;
+            
+            println!("Creating vdisk:");
+            println!("  Path: {}", vdisk_path.display());
+            println!("  Size: {}", utils::format_bytes(size_bytes));
+
+            vdisk::VDisk::create(&vdisk_path, size_bytes)
+                .context("Failed to create vdisk")?;
+            
+            println!("  Vdisk successfully created");
         }
         Commands::Info { db_path } => {
             let geom = db::get_geometry(&db_path)
